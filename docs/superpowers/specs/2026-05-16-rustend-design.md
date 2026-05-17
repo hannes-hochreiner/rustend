@@ -153,12 +153,20 @@ struct PullRequest {
 struct PullResponse {
     up_to_transaction: TransactionId,
     revisions:         Vec<Revision>,
+    object_heads:      Vec<ObjectHeads>,
+}
+
+struct ObjectHeads {
+    object_id:    ObjectId,
+    revision_ids: Vec<RevisionId>,  // all current server heads; len > 1 means conflict
 }
 ```
 
 `since: None` is used on the first sync. The server excludes revisions that originated from the requesting `client_id` (the client already holds them).
 
 All filter fields on `PullRequest` are ANDed together at the top level.
+
+`object_heads` lists the authoritative server-side heads for every object touched by revisions in this response. The server guarantees that all revision data referenced in `object_heads` is either present in `revisions` or was already delivered in a prior pull. The client replaces its local head records for those objects with the server-provided values.
 
 ### 3.6 Filter Types
 
@@ -222,6 +230,7 @@ The primary transport is HTTP REST. A WebSocket extension for real-time server-p
 | `GET` | `/objects/:id` | Retrieve the current head revision(s) for an object |
 | `GET` | `/files/:id` | Download file binary content |
 | `POST` | `/files/:id` | Upload file binary content |
+| `DELETE` | `/files/:id` | Remove file binary content (metadata revision unaffected) |
 
 Pull uses `POST /changes/query` (rather than `GET /changes`) because the `PullRequest` body carries a structured DNF filter that cannot be cleanly encoded as URL query parameters.
 
@@ -238,20 +247,23 @@ Push is idempotent per revision: the server rejects a revision whose `RevisionId
 
 1. Client reads `last_server_txn_id` from its local sync state (`None` on first sync).
 2. Client issues `POST /changes/query` with a `PullRequest` body.
-3. Server returns all revisions from transactions newer than `since`, excluding those created by the requesting client.
+3. Server returns all revisions since `since` (excluding the client's own), plus `object_heads` declaring the current heads for every object touched.
 4. For each incoming revision the client:
    a. Checks whether it passes the local filter (for objects where offline caching is desired).
-   b. If it passes, stores the revision in IndexedDB and runs conflict detection.
+   b. If it passes, stores the revision in IndexedDB.
    c. If it does not pass, discards the revision (the object remains live-only from the server).
-5. Client updates `last_server_txn_id` to `up_to_transaction`.
+5. For each `ObjectHeads` entry in the response, the client replaces its local `object_heads` records for that object with the server-provided revision IDs. Any object whose entry contains more than one revision ID is now in a conflicted state.
+6. Client updates `last_server_txn_id` to `up_to_transaction`.
 
 ### 4.4 Conflict Detection
 
-A conflict exists when an object has two or more head revisions — revisions that are not ancestors of each other. Conflicts arise when the client and server have both produced `Update` revisions from the same parent independently.
+A conflict exists when an object has two or more head revisions — revisions that are not ancestors of each other. This arises when independent clients both produce an `Update` from the same parent before either has synced with the server.
 
-On receiving a revision for object X during pull, the client checks whether the locally stored head of X is an ancestor of the incoming revision. If not, and the incoming revision is also not an ancestor of the local head, both revisions are stored as concurrent heads. The object is now in a conflicted state.
+**Conflict detection is the server's responsibility.** The server maintains an `object_heads` table that records the current head revision(s) per object (see §6.1). When a pushed revision arrives, the server removes any of its declared parents from that object's head set and adds the new revision. If, after this update, an object has more than one head, a conflict exists. The server communicates the authoritative head set to the client in every `PullResponse` via the `object_heads` field.
 
-Conflict resolution is performed by the user via the application. The library exposes conflicting heads passively (see §5.2). The application writes a resolved version using `resolve_conflict`, which creates a new `Merge` revision with all conflicting heads as parents.
+Clients must not attempt to derive conflict state by traversing the local revision DAG. A client cannot reliably determine ancestry because it may not hold the complete revision history: it may never have cached an intermediate revision created by another client, or it may have filtered out older versions. The server's `object_heads` is the single source of truth for conflict state.
+
+Conflict resolution is performed by the user via the application. The library exposes conflicting heads passively through `repo.get` (see §5.3). The application writes a resolved version using `repo.resolve_conflict`, which creates a new `Merge` revision with all conflicting heads as parents.
 
 ---
 
@@ -264,7 +276,7 @@ The library manages the following object stores. The application must not write 
 | Store | Key | Description |
 |-------|-----|-------------|
 | `revisions` | `RevisionId` | All locally known revisions (synced and pending) |
-| `object_heads` | `ObjectId` | Current head revision(s) per object; may hold multiple entries per object when conflicted |
+| `object_heads` | `(ObjectId, RevisionId)` | Current head revision(s) per object as reported by the server; multiple entries per object indicate a conflict |
 | `files` | `ObjectId` | Binary file content |
 | `sync_state` | `"state"` | Single record: `ClientId`, `last_server_txn_id` |
 
@@ -291,6 +303,25 @@ Each index is scoped to an `object_type` and targets a JSONPath within the objec
 ### 5.3 Repository API
 
 ```rust
+// Application-facing types (defined in rustend-client)
+
+struct ObjectVersion<T> {
+    revision_id: RevisionId,
+    content:     VersionContent<T>,
+}
+
+enum VersionContent<T> {
+    Active(T),
+    Deleted,
+}
+
+// IndexRange expresses a key range over an index value:
+//   All                      — every entry in the index
+//   Eq(Value)                — exact match
+//   Bounds { lower, upper }  — inclusive or exclusive bounds on each side
+```
+
+```rust
 // Lifecycle
 Repository::open(db_name: &str, schema: IndexSchema) -> Result<Repository>
 
@@ -305,52 +336,47 @@ repo.delete(object_id: ObjectId, parent: RevisionId)
     -> Result<RevisionId>
 
 // Read
+// Returns [] if not in local cache, [v] for a normal object, [v1, v2, ...] if conflicted.
+// A Deleted head is returned as VersionContent::Deleted, giving the application full
+// visibility into delete/update conflicts without a separate API call.
 repo.get<T: DeserializeOwned>(object_id: ObjectId)
-    -> Result<Option<T>>
+    -> Result<Vec<ObjectVersion<T>>>
 
 repo.query_by_index<T: DeserializeOwned>(index_name: &str, range: IndexRange)
-    -> Result<Vec<T>>
+    -> Result<Vec<ObjectVersion<T>>>
 
-// IndexRange expresses a bounded or unbounded key range over an index value:
-//   All                       — every entry in the index
-//   Eq(Value)                 — exact match
-//   Bounds { lower, upper }   — inclusive or exclusive bounds on each side
-
-// Conflicts
-repo.conflicts_for(object_id: ObjectId)
-    -> Result<Vec<Revision>>          // returns all concurrent head revisions
-
+// Conflict resolution
 repo.resolve_conflict<T: Serialize>(
-    object_id:       ObjectId,
-    parent_revisions: &[RevisionId],  // all heads being resolved
-    resolved:        T,
+    object_id: ObjectId,
+    parents:   &[RevisionId],         // all conflicting head revision IDs
+    resolved:  VersionContent<T>,     // Active(value) or Deleted
 ) -> Result<RevisionId>               // creates a Merge revision
 
-// Files
-repo.save_file(object_id: ObjectId, content_type: &str, data: &[u8])
+// Files (binary content stored separately from file metadata revisions)
+repo.save_file_data(object_id: ObjectId, data: &[u8])
     -> Result<()>
 
-repo.get_file(object_id: ObjectId)
-    -> Result<Option<Vec<u8>>>
+repo.get_file_data(object_id: ObjectId)
+    -> Result<Option<Vec<u8>>>        // None if data not yet uploaded or was removed
+
+repo.delete_file_data(object_id: ObjectId)
+    -> Result<()>                     // removes binary content; the metadata revision is unaffected
 
 // Sync
 repo.sync(server_url: &str, pull_params: PullRequest)
     -> Result<SyncResult>
 
-// SyncResult summarises the outcome of a sync round:
 struct SyncResult {
     pushed:     u32,
     pulled:     u32,
-    conflicted: u32,                     // objects that entered a conflicted state
-    rejected:   Vec<RejectedRevision>,   // revisions the server refused
+    conflicted: u32,                  // objects that entered a conflicted state this round
+    rejected:   Vec<RejectedRevision>,
 }
 ```
 
-`SyncResult` carries counts of pushed, pulled, and conflicted revisions, plus any rejected revisions with their reasons.
+`repo.get` does not fall back to the server for objects absent from the local cache. The application is responsible for deciding when to issue a live request via `GET /objects/:id`.
 
-`repo.get` returns `None` if the object does not exist locally; it does not fall back to the server. The application is responsible for deciding when to issue a live server request for objects outside the local cache (via `GET /objects/:id`).
-
-Calling `repo.get` on an object that is in a conflicted state returns one of the conflicting heads (unspecified). The application must explicitly call `repo.conflicts_for` to detect and handle conflicts.
+The `ObjectVersion.revision_id` field gives the application the parent ID it needs to pass to `repo.update` or `repo.delete` on a subsequent write, without requiring a separate lookup.
 
 ### 5.4 Sync Status
 
@@ -412,14 +438,27 @@ CREATE TABLE transaction_revisions (
     PRIMARY KEY (transaction_id, revision_id)
 );
 
+CREATE TABLE object_heads (
+    object_id   UUID NOT NULL,
+    revision_id UUID NOT NULL REFERENCES revisions(id),
+    PRIMARY KEY (object_id, revision_id)
+);
+
 CREATE TABLE files (
-    object_id    UUID PRIMARY KEY,
-    content_type TEXT  NOT NULL,
-    data         BYTEA NOT NULL
+    object_id UUID PRIMARY KEY,
+    data      BYTEA NOT NULL
 );
 ```
 
-The `revisions.data` column is indexed with a GIN index using `jsonb_path_ops`, which supports efficient `jsonb_path_exists` queries used to evaluate content filters. The `deleted / data` constraint at the database level mirrors the `Content` enum invariant from `rustend-core`.
+The `revisions.data` column is indexed with a GIN index using `jsonb_path_ops`, which supports efficient `jsonb_path_exists` queries used to evaluate content filters. The `deleted / data` constraint mirrors the `Content` enum invariant from `rustend-core`.
+
+The `object_heads` table is updated atomically with every accepted revision during a push transaction:
+1. Remove all rows where `(object_id = new_revision.object_id AND revision_id IN parent_ids_of_new_revision)`.
+2. Insert `(object_id, new_revision.id)`.
+
+After this update, if `COUNT(*) WHERE object_id = X > 1`, object X is conflicted. The server populates `PullResponse.object_heads` by querying this table for all objects touched in the response.
+
+The `files` table stores raw binary content only. The `content_type` field is part of the file's metadata revision (`object_type = "file"`, `Content::Active` JSON payload) and is not duplicated here.
 
 ### 6.2 Library Surface
 
@@ -444,21 +483,36 @@ The library does not implement authentication or authorisation. It is the applic
 
 ### 6.3 Pull Query Construction
 
-The server translates a `PullRequest` into a single parameterised SQL query:
+The server translates a `PullRequest` into a single parameterised SQL query. All clauses are ANDed at the top level:
 
-1. Base predicate: `transactions.id > since AND revisions.created_by != client_id`
-2. If `object_types` is set: `AND revisions.object_type = ANY($n)`
-3. For each `CreatedAtFilter`: `AND revisions.created_at {op} $n`
-4. For each DNF clause `(c1 AND c2) OR (c3 AND c4)`:
+1. **Base:** `transactions.id > $since AND revisions.created_by != $client_id`
+2. **`object_types`:** `AND revisions.object_type = ANY($types)`
+3. **`CreatedAtFilter`:** one clause per entry, e.g. `AND revisions.created_at >= $t`
+4. **Content filter (DNF):** each inner `Vec` becomes an AND group; inner groups are ORed:
    ```sql
    AND (
      (jsonb_path_exists(data, $p1) AND jsonb_path_exists(data, $p2))
      OR
-     (jsonb_path_exists(data, $p3) AND jsonb_path_exists(data, $p4))
+     (jsonb_path_exists(data, $p3))
    )
    ```
 
-The `jsonb_path_ops` GIN index is used automatically by PostgreSQL for `jsonb_path_exists` predicates, keeping pull queries efficient even at large data volumes.
+Each `FilterCondition` maps to a `jsonb_path_exists` call with an inline JSONPath filter expression. The mapping for each `FilterOperator` variant is:
+
+| Variant | JSONPath filter expression |
+|---------|---------------------------|
+| `Exists` | `'$.path'` (path must exist) |
+| `IsNull` | `'$.path ? (@ == null)'` |
+| `Eq(v)` | `'$.path ? (@ == $val)'` |
+| `Ne(v)` | `'$.path ? (@ != $val)'` |
+| `Gt(v)` | `'$.path ? (@ > $val)'` |
+| `Gte(v)` | `'$.path ? (@ >= $val)'` |
+| `Lt(v)` | `'$.path ? (@ < $val)'` |
+| `Lte(v)` | `'$.path ? (@ <= $val)'` |
+| `Contains(v)` | `'$.path ? (@ like_regex $val)'` for strings; `@> $v::jsonb` for arrays |
+| `StartsWith(s)` | `'$.path ? (@ starts with $val)'` |
+
+The `$val` placeholder is passed as a `JSONB` parameter via `jsonb_build_object('val', $n)`. The `jsonb_path_ops` GIN index on `revisions.data` is used automatically by PostgreSQL for all `jsonb_path_exists` predicates.
 
 ### 6.4 File Storage
 
@@ -609,15 +663,17 @@ Invalid combinations are unrepresentable. The database schema enforces the same 
 
 ---
 
-## ADR-007: Passive Conflict Exposure
+## ADR-007: Server-Side Head Tracking and Unified `get` API
 
 **Status:** Accepted
 
-**Context:** When a conflicting version arrives from the server, the library must decide how to surface it to the application.
+**Context:** Conflicts must be detected and communicated to the client. An earlier design had the client infer conflict state by checking whether the locally stored head is an ancestor of an incoming revision. This is unreliable: the client may not hold the complete revision history (intermediate revisions from other clients may have been filtered out or never cached), so ancestor traversal cannot be performed with confidence.
 
-**Decision:** The library stores all concurrent head revisions and exposes them passively via `repo.conflicts_for(object_id)`. The application detects conflicts, renders a resolution UI, and writes a resolved version via `repo.resolve_conflict`. The library provides no automatic resolution strategy.
+**Decision (conflict detection):** The server maintains an `object_heads` table that tracks the current head revision(s) for every object. When a pushed revision arrives, the server atomically removes the revision's declared parents from the head set and inserts the new revision. An object with more than one head is conflicted. The server includes `ObjectHeads` records in every `PullResponse`; the client replaces its local head state with the server-provided values rather than computing it independently.
 
-**Consequences:** The application has full control over conflict resolution UX. Conflicts are not resolved silently. Applications that do not call `conflicts_for` will receive one of the conflicting heads from `repo.get` (unspecified selection) — this is a known limitation and is documented.
+**Decision (client API):** `repo.get` and `repo.conflicts_for` are merged into a single method returning `Vec<ObjectVersion<T>>`. An empty vec means the object is not in the local cache; a single-element vec is the normal case; multiple elements indicate a conflict. Tombstone heads are returned as `VersionContent::Deleted`, giving full visibility into delete/update conflicts. `repo.resolve_conflict` accepts a `VersionContent<T>` so the resolved state can itself be a deletion.
+
+**Consequences:** The client never needs to traverse the revision DAG to determine conflict state, eliminating the requirement to hold complete history. The unified `repo.get` makes conflicts impossible to ignore accidentally: any code path that reads an object must handle the `Vec` length. Developers cannot obtain an object value without at least acknowledging that multiple versions may exist.
 
 ---
 
@@ -641,7 +697,19 @@ Invalid combinations are unrepresentable. The database schema enforces the same 
 
 **Decision:** File metadata (`filename`, `content_type`, `size_bytes`) is stored as a `Revision` with `object_type = "file"` and a JSON payload. Binary content is stored separately, keyed by `ObjectId`, in the `files` IndexedDB store (client) and the `files` table (server). The revision/lineage machinery is uniform across objects and files; only the binary retrieval path differs.
 
-**Consequences:** Files participate in the same DAG history and conflict detection as structured objects. Revision history does not embed binary blobs (avoids bloating the `revisions` store). The application must make two calls to fully read a file: one for metadata via `repo.get` and one for content via `repo.get_file`.
+**Consequences:** Files participate in the same DAG history and conflict detection as structured objects. Revision history does not embed binary blobs (avoids bloating the `revisions` store). The application makes two calls to fully read a file: `repo.get` for metadata and `repo.get_file_data` for binary content. A file object may exist without binary content (before upload or after `delete_file_data`); `repo.get_file_data` returns `None` in that state.
+
+---
+
+## ADR-011: File Binary Content Is Independent of Metadata Revisions
+
+**Status:** Accepted
+
+**Context:** File objects have two distinct lifecycle concerns: the metadata (filename, content type, size) follows the standard revision/lineage model; the binary content is large, immutable per upload, and may not be available at the time the metadata revision is created (e.g., upload in progress) or may need to be cleared without creating a new metadata revision.
+
+**Decision:** Binary content is stored in a dedicated table/store keyed by `ObjectId`, entirely separate from the `revisions` table. Three operations manage it independently: `save_file_data` (upsert), `get_file_data` (fetch, returns `None` if absent), and `delete_file_data` (remove row). None of these operations create a new `Revision`. The `content_type` MIME type is stored only in the metadata revision's JSON payload; it is not duplicated in the binary storage layer.
+
+**Consequences:** A file object may legitimately exist without binary content. Applications must handle the `None` case from `get_file_data`. The binary content does not participate in the revision DAG; if binary content needs versioning, that is modelled at the application level by creating new file objects. This keeps the sync protocol simple: only revisions are synchronised; binary content is transferred via dedicated file upload/download endpoints.
 
 ---
 
