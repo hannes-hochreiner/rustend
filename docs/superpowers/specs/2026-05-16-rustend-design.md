@@ -152,21 +152,26 @@ struct PullRequest {
 
 struct PullResponse {
     up_to_transaction: TransactionId,
-    revisions:         Vec<Revision>,
-    object_heads:      Vec<ObjectHeads>,
+    object_updates:    Vec<ObjectUpdate>,
 }
 
-struct ObjectHeads {
-    object_id:    ObjectId,
-    revision_ids: Vec<RevisionId>,  // all current server heads; len > 1 means conflict
+struct ObjectUpdate {
+    object_id: ObjectId,
+    action:    HeadAction,
+    heads:     Vec<Revision>,  // current head revision(s) only; no intermediate revisions
+}
+
+enum HeadAction {
+    Replace,   // single server head supersedes the client's previously known state
+    Conflict,  // multiple concurrent heads exist; client stores all of them
 }
 ```
 
-`since: None` is used on the first sync. The server excludes revisions that originated from the requesting `client_id` (the client already holds them).
+`since: None` is used on the first sync. The server excludes objects whose only changes were made by the requesting `client_id`.
 
 All filter fields on `PullRequest` are ANDed together at the top level.
 
-`object_heads` lists the authoritative server-side heads for every object touched by revisions in this response. The server guarantees that all revision data referenced in `object_heads` is either present in `revisions` or was already delivered in a prior pull. The client replaces its local head records for those objects with the server-provided values.
+For `Replace`, `heads` always contains exactly one revision. For `Conflict`, `heads` contains all current server heads for that object; the client stores any it does not already hold locally. The server determines the action solely from the `object_heads` table: one head → `Replace`, more than one → `Conflict`. No DAG traversal is required on either side.
 
 ### 3.6 Filter Types
 
@@ -247,21 +252,24 @@ Push is idempotent per revision: the server rejects a revision whose `RevisionId
 
 1. Client reads `last_server_txn_id` from its local sync state (`None` on first sync).
 2. Client issues `POST /changes/query` with a `PullRequest` body.
-3. Server returns all revisions since `since` (excluding the client's own), plus `object_heads` declaring the current heads for every object touched.
-4. For each incoming revision the client:
-   a. Checks whether it passes the local filter (for objects where offline caching is desired).
-   b. If it passes, stores the revision in IndexedDB.
-   c. If it does not pass, discards the revision (the object remains live-only from the server).
-5. For each `ObjectHeads` entry in the response, the client replaces its local `object_heads` records for that object with the server-provided revision IDs. Any object whose entry contains more than one revision ID is now in a conflicted state.
-6. Client updates `last_server_txn_id` to `up_to_transaction`.
+3. Server evaluates the filter and, for each object that has changed since `since` and whose current head passes the filter, produces one `ObjectUpdate`:
+   - Reads current heads from `object_heads` table.
+   - If exactly one head: `HeadAction::Replace`, `heads = [that revision]`.
+   - If more than one head: `HeadAction::Conflict`, `heads = [all current head revisions]`.
+   - Excludes objects whose changes are solely attributable to the requesting `client_id`.
+4. For each `ObjectUpdate` the client:
+   a. Stores any head revision(s) it does not already hold in the local `revisions` store.
+   b. For `Replace`: if the client has no locally pending (unsynced) revision for this object, replaces its `object_heads` entry with the single new head. If a pending revision exists, the server head is stored in `revisions` but `object_heads` is left unchanged; the conflict will be detected and reported by the server after the pending revision is pushed.
+   c. For `Conflict`: adds all received heads to `object_heads`, producing a locally conflicted state.
+5. Client updates `last_server_txn_id` to `up_to_transaction`.
 
 ### 4.4 Conflict Detection
 
 A conflict exists when an object has two or more head revisions — revisions that are not ancestors of each other. This arises when independent clients both produce an `Update` from the same parent before either has synced with the server.
 
-**Conflict detection is the server's responsibility.** The server maintains an `object_heads` table that records the current head revision(s) per object (see §6.1). When a pushed revision arrives, the server removes any of its declared parents from that object's head set and adds the new revision. If, after this update, an object has more than one head, a conflict exists. The server communicates the authoritative head set to the client in every `PullResponse` via the `object_heads` field.
+**Conflict detection is the server's responsibility.** The server maintains an `object_heads` table that records the current head revision(s) per object (see §6.1). When a pushed revision arrives, the server removes any of its declared parents from that object's head set and adds the new revision. If an object then has more than one head, a conflict exists. The server communicates this via `HeadAction` in every `ObjectUpdate`: `Replace` means a single unambiguous head; `Conflict` means multiple concurrent heads.
 
-Clients must not attempt to derive conflict state by traversing the local revision DAG. A client cannot reliably determine ancestry because it may not hold the complete revision history: it may never have cached an intermediate revision created by another client, or it may have filtered out older versions. The server's `object_heads` is the single source of truth for conflict state.
+Clients must not attempt to derive conflict state by traversing the local revision DAG. A client cannot reliably determine ancestry because it may not hold the complete revision history: intermediate revisions created by other clients may have been filtered out or never cached. The server's `object_heads` table is the single source of truth for conflict state. Intermediate revisions are never sent to the client; only current heads travel over the wire.
 
 Conflict resolution is performed by the user via the application. The library exposes conflicting heads passively through `repo.get` (see §5.3). The application writes a resolved version using `repo.resolve_conflict`, which creates a new `Merge` revision with all conflicting heads as parents.
 
@@ -276,7 +284,7 @@ The library manages the following object stores. The application must not write 
 | Store | Key | Description |
 |-------|-----|-------------|
 | `revisions` | `RevisionId` | All locally known revisions (synced and pending) |
-| `object_heads` | `(ObjectId, RevisionId)` | Current head revision(s) per object as reported by the server; multiple entries per object indicate a conflict |
+| `object_heads` | `(ObjectId, RevisionId)` | Current head revision(s) per object; entries are replaced or extended based on `HeadAction` received during pull; a locally pending revision may also appear here until it is pushed and confirmed |
 | `files` | `ObjectId` | Binary file content |
 | `sync_state` | `"state"` | Single record: `ClientId`, `last_server_txn_id` |
 
@@ -669,7 +677,7 @@ Invalid combinations are unrepresentable. The database schema enforces the same 
 
 **Context:** Conflicts must be detected and communicated to the client. An earlier design had the client infer conflict state by checking whether the locally stored head is an ancestor of an incoming revision. This is unreliable: the client may not hold the complete revision history (intermediate revisions from other clients may have been filtered out or never cached), so ancestor traversal cannot be performed with confidence.
 
-**Decision (conflict detection):** The server maintains an `object_heads` table that tracks the current head revision(s) for every object. When a pushed revision arrives, the server atomically removes the revision's declared parents from the head set and inserts the new revision. An object with more than one head is conflicted. The server includes `ObjectHeads` records in every `PullResponse`; the client replaces its local head state with the server-provided values rather than computing it independently.
+**Decision (conflict detection):** The server maintains an `object_heads` table that tracks the current head revision(s) for every object. When a pushed revision arrives, the server atomically removes the revision's declared parents from the head set and inserts the new revision. An object with more than one head is conflicted. The server communicates this via `HeadAction` in each `ObjectUpdate` of the `PullResponse`: `Replace` (one server head) or `Conflict` (many). Only current head revisions are sent; intermediate revisions are never transmitted. The client updates its local `object_heads` accordingly and performs no DAG traversal.
 
 **Decision (client API):** `repo.get` and `repo.conflicts_for` are merged into a single method returning `Vec<ObjectVersion<T>>`. An empty vec means the object is not in the local cache; a single-element vec is the normal case; multiple elements indicate a conflict. Tombstone heads are returned as `VersionContent::Deleted`, giving full visibility into delete/update conflicts. `repo.resolve_conflict` accepts a `VersionContent<T>` so the resolved state can itself be a deletion.
 
