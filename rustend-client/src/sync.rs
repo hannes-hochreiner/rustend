@@ -1,6 +1,6 @@
 use idb::Database;
 use rustend_core::{
-    ClientId, HeadAction, PullRequest, PushRequest, Revision, RevisionId,
+    ClientId, HeadAction, PullRequest, PushRequest, Revision,
 };
 use crate::{
     error::RustendClientError,
@@ -29,7 +29,7 @@ async fn push_pending(
         return Ok(0);
     }
 
-    let revisions: Vec<Revision> = pending.iter().map(|r| r.revision.clone()).collect();
+    let revisions: Vec<Revision> = pending.iter().map(|r| r.revision()).collect();
     let req = PushRequest { client_id, revisions };
 
     let url = format!("{}/changes", server_url.trim_end_matches('/'));
@@ -91,10 +91,7 @@ async fn pull_updates(
 
     for update in pull_resp.object_updates {
         for rev in &update.heads {
-            let record = idb_revisions::RevisionRecord {
-                revision:    rev.clone(),
-                sync_status: idb_revisions::SyncStatus::Synced,
-            };
+            let record = idb_revisions::RevisionRecord::from_revision(rev, idb_revisions::SyncStatus::Synced);
             idb_revisions::put_revision(db, &record).await?;
             pulled += 1;
         }

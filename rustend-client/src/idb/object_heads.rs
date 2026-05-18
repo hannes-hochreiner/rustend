@@ -2,6 +2,7 @@ use idb::{Database, Query};
 use rustend_core::{Content, Lineage, ObjectId, Revision, RevisionId};
 use serde::{Deserialize, Serialize};
 use crate::error::RustendClientError;
+use super::serde_util::{from_js, to_js};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct HeadRecord {
@@ -10,6 +11,8 @@ pub struct HeadRecord {
     pub object_type: String,
     pub content:     Content,
     pub lineage:     Lineage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data:        Option<serde_json::Value>,
 }
 
 pub async fn replace_heads(
@@ -29,8 +32,7 @@ pub async fn replace_heads(
 
     for rev in heads {
         let record = head_record_from_revision(object_id, rev);
-        let val = serde_wasm_bindgen::to_value(&record)
-            .map_err(|e| RustendClientError::IndexedDb(e.to_string()))?;
+        let val = to_js(&record)?;
         store.put(&val, None)?.await?;
     }
     tx.await?;
@@ -45,8 +47,7 @@ pub async fn add_heads(
     let store = tx.object_store("object_heads")?;
     for rev in heads {
         let record = head_record_from_revision(rev.object_id, rev);
-        let val = serde_wasm_bindgen::to_value(&record)
-            .map_err(|e| RustendClientError::IndexedDb(e.to_string()))?;
+        let val = to_js(&record)?;
         store.put(&val, None)?.await?;
     }
     tx.await?;
@@ -75,17 +76,21 @@ async fn get_heads_in_store(
     let range = idb::KeyRange::bound(&lower, &upper, Some(false), Some(false))?;
     let results = store.get_all(Some(Query::KeyRange(range)), None)?.await?;
     results.into_iter()
-        .map(|v| serde_wasm_bindgen::from_value(v)
-            .map_err(|e| RustendClientError::IndexedDb(e.to_string())))
+        .map(|v| from_js(v))
         .collect()
 }
 
 fn head_record_from_revision(object_id: ObjectId, rev: &Revision) -> HeadRecord {
+    let data = match &rev.content {
+        Content::Active(v) => Some(v.clone()),
+        Content::Deleted   => None,
+    };
     HeadRecord {
         object_id,
         revision_id: rev.id,
         object_type: rev.object_type.clone(),
         content:     rev.content.clone(),
         lineage:     rev.lineage.clone(),
+        data,
     }
 }

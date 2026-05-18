@@ -57,10 +57,7 @@ impl Repository {
             content:     Content::Active(data),
         };
         let revision_id = rev.id;
-        let record = idb_revisions::RevisionRecord {
-            revision:    rev.clone(),
-            sync_status: idb_revisions::SyncStatus::Pending,
-        };
+        let record = idb_revisions::RevisionRecord::from_revision(&rev, idb_revisions::SyncStatus::Pending);
         idb_revisions::put_revision(&self.db, &record).await?;
         idb_heads::replace_heads(&self.db, object_id, &[rev]).await?;
         Ok((object_id, revision_id))
@@ -87,10 +84,7 @@ impl Repository {
             content:     Content::Active(data),
         };
         let revision_id = rev.id;
-        let record = idb_revisions::RevisionRecord {
-            revision:    rev.clone(),
-            sync_status: idb_revisions::SyncStatus::Pending,
-        };
+        let record = idb_revisions::RevisionRecord::from_revision(&rev, idb_revisions::SyncStatus::Pending);
         idb_revisions::put_revision(&self.db, &record).await?;
         idb_heads::replace_heads(&self.db, object_id, &[rev]).await?;
         Ok(revision_id)
@@ -115,10 +109,7 @@ impl Repository {
             content:     Content::Deleted,
         };
         let revision_id = rev.id;
-        let record = idb_revisions::RevisionRecord {
-            revision:    rev.clone(),
-            sync_status: idb_revisions::SyncStatus::Pending,
-        };
+        let record = idb_revisions::RevisionRecord::from_revision(&rev, idb_revisions::SyncStatus::Pending);
         idb_revisions::put_revision(&self.db, &record).await?;
         idb_heads::replace_heads(&self.db, object_id, &[rev]).await?;
         Ok(revision_id)
@@ -230,10 +221,7 @@ impl Repository {
             content,
         };
         let revision_id = rev.id;
-        let record = idb_revisions::RevisionRecord {
-            revision:    rev.clone(),
-            sync_status: idb_revisions::SyncStatus::Pending,
-        };
+        let record = idb_revisions::RevisionRecord::from_revision(&rev, idb_revisions::SyncStatus::Pending);
         idb_revisions::put_revision(&self.db, &record).await?;
         idb_heads::replace_heads(&self.db, object_id, &[rev]).await?;
         Ok(revision_id)
