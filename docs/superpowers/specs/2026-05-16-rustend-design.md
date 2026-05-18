@@ -577,6 +577,7 @@ Handler errors are returned as JSON responses with appropriate HTTP status codes
 - External object storage for files (planned extension via `FileStore` trait)
 - Server-side conflict resolution (conflicts are resolved on the client by the user)
 - Client-side cross-object sync filters (the DNF filter operates on individual object data only; cross-object relationships must be handled at the application level)
+- Automatic file binary download during sync — binary content is never fetched by `repo.sync`; the application calls `repo.get_file_data` explicitly when it needs the content, which fetches from the server if not locally cached. This keeps sync lightweight and allows different devices to apply their own download policies.
 
 ---
 
