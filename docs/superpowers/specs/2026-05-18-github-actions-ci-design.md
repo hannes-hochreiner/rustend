@@ -8,7 +8,7 @@
 
 ## 1. Purpose
 
-Run the full rustend test suite automatically on every push to any branch. Provide fast feedback by running the `rustend-core` unit tests first, then running the server and client integration tests in parallel once core passes.
+Run the full rustend test suite automatically on every push to any branch and on every pull request. Provide fast feedback by running the `rustend-core` unit tests first, then running the server and client integration tests in parallel once core passes.
 
 ---
 
@@ -27,10 +27,12 @@ One new file:
 ## 3. Trigger
 
 ```yaml
-on: push
+on:
+  push:
+  pull_request:
 ```
 
-Fires on every push to every branch. Pull-request runs are out of scope for this spec.
+Fires on every push to every branch and on every pull request. For a pull request, GitHub runs CI against the merge commit, so the workflow covers both the branch head and the proposed merge result.
 
 ---
 
@@ -111,7 +113,6 @@ The cache key is derived from the OS, Rust toolchain version, and the hash of `C
 
 ## 8. Out of Scope
 
-- Pull-request triggers
 - Scheduled runs
 - Publishing or releasing artifacts
 - Notification on failure (e.g. Slack, email)
