@@ -259,8 +259,8 @@ Push is idempotent per revision: the server rejects a revision whose `RevisionId
    - Excludes objects whose changes are solely attributable to the requesting `client_id`.
 4. For each `ObjectUpdate` the client:
    a. Stores any head revision(s) it does not already hold in the local `revisions` store.
-   b. For `Replace`: if the client has no locally pending (unsynced) revision for this object, replaces its `object_heads` entry with the single new head. If a pending revision exists, the server head is stored in `revisions` but `object_heads` is left unchanged; the conflict will be detected and reported by the server after the pending revision is pushed.
-   c. For `Conflict`: adds all received heads to `object_heads`, producing a locally conflicted state.
+   b. For `Replace`: replaces the `object_heads` entry for this object with the single new head. If the client already has a locally pending (unsynced) revision in `object_heads`, that revision remains alongside the new head, producing a locally conflicted state. This is correct: the pending revision and the server head are genuinely concurrent.
+   c. For `Conflict`: adds all received heads to `object_heads`. Any existing pending revision also remains, extending the conflict set.
 5. Client updates `last_server_txn_id` to `up_to_transaction`.
 
 ### 4.4 Conflict Detection
@@ -284,7 +284,7 @@ The library manages the following object stores. The application must not write 
 | Store | Key | Description |
 |-------|-----|-------------|
 | `revisions` | `RevisionId` | All locally known revisions (synced and pending) |
-| `object_heads` | `(ObjectId, RevisionId)` | Current head revision(s) per object; entries are replaced or extended based on `HeadAction` received during pull; a locally pending revision may also appear here until it is pushed and confirmed |
+| `object_heads` | `(ObjectId, RevisionId)` | Current head revision(s) per object; updated on every pull based on `HeadAction`; pending (unsynced) revisions coexist with server heads and are treated as conflicting until resolved and pushed |
 | `files` | `ObjectId` | Binary file content |
 | `sync_state` | `"state"` | Single record: `ClientId`, `last_server_txn_id` |
 
