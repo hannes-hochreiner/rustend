@@ -40,8 +40,10 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Install geckodriver
         run: |
-          GECKODRIVER_VERSION=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest \
+          GECKODRIVER_VERSION=$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/mozilla/geckodriver/releases/latest \
             | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
+          [ -n "$GECKODRIVER_VERSION" ] || { echo "Failed to detect geckodriver version"; exit 1; }
           curl -sL "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz" \
             | tar -xz
           sudo mv geckodriver /usr/local/bin/
