@@ -50,7 +50,7 @@ jobs:
           TARBALL="geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz"
           curl -sLO "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/${TARBALL}"
           curl -sLO "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/${TARBALL}.sha256"
-          sha256sum --check "${TARBALL}.sha256"
+          sha256sum --strict --check "${TARBALL}.sha256"
           tar -xzf "${TARBALL}"
           sudo mv geckodriver /usr/local/bin/
       - name: Run WASM browser tests
