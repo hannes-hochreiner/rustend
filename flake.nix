@@ -1,5 +1,5 @@
 {
-  description = "RouchDB development environment";
+  description = "Rustend development environment";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -31,7 +31,7 @@
     # packages.${system}.default = self.packages.x86_64-linux.hello;
 
     devShells.${system}.default = pkgs.mkShell {
-      name = "rouchdb";
+      name = "rustend";
       
       # Inherit inputs from checks.
       # checks = self.checks.${system};
