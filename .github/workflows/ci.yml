@@ -36,13 +36,16 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Install Firefox
+        uses: browser-actions/setup-firefox@latest
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
       - name: Install geckodriver
         run: |
           GECKODRIVER_VERSION=$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             https://api.github.com/repos/mozilla/geckodriver/releases/latest \
-            | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
+            | jq -r '.tag_name | ltrimstr("v")')
           [ -n "$GECKODRIVER_VERSION" ] || { echo "Failed to detect geckodriver version"; exit 1; }
           curl -sL "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz" \
             | tar -xz
