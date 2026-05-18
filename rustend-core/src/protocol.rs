@@ -20,7 +20,7 @@ pub struct RejectedRevision {
     pub reason:      RejectionReason,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum RejectionReason {
     DuplicateRevisionId,
     UnknownParent,
