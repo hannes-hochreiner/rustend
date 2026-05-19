@@ -8,7 +8,7 @@
 
 **Tech Stack:** GitHub Actions, Rust/Cargo, wasm-pack, Firefox (pre-installed on `ubuntu-latest`), geckodriver
 
-**Working directory:** Run all commands from the root of the `worktree-rustend-implementation` worktree (`/home/hannes/Repository/rustend/.claude/worktrees/rustend-implementation/`).
+**Working directory:** Run all commands from the root of the `worktree-rustend-implementation` worktree (that is, the repository root for this checkout).
 
 ---
 
