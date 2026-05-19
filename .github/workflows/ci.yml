@@ -36,22 +36,8 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Install Firefox
-        uses: browser-actions/setup-firefox@v1
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack
-      - name: Install geckodriver
-        run: |
-          GECKODRIVER_VERSION=$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/mozilla/geckodriver/releases/latest \
-            | jq -r '.tag_name | ltrimstr("v")')
-          [ -n "$GECKODRIVER_VERSION" ] || { echo "Failed to detect geckodriver version"; exit 1; }
-          TARBALL="geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz"
-          curl -sLO "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/${TARBALL}"
-          curl -sLO "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/${TARBALL}.sha256"
-          sha256sum --strict --check "${TARBALL}.sha256"
-          tar -xzf "${TARBALL}"
-          sudo mv geckodriver /usr/local/bin/
       - name: Run WASM browser tests
         run: wasm-pack test --firefox --headless rustend-client
