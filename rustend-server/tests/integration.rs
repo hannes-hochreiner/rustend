@@ -468,3 +468,64 @@ async fn get_parents_batch_matches_individual_queries() {
     assert!(root_parents.is_empty());
     assert_eq!(update_parents, vec![root.id.0]);
 }
+
+#[tokio::test]
+async fn filter_does_not_hide_conflict_when_one_head_matches() {
+    let (store, _container) = setup().await;
+    let client_a = rustend_core::ClientId::new();
+    let client_b = rustend_core::ClientId::new();
+    let client_c = rustend_core::ClientId::new();
+    for c in [client_a, client_b, client_c] {
+        rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
+    }
+
+    let object_id = ObjectId::new();
+    let t0 = chrono::Utc::now();
+
+    let root = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: t0 - chrono::Duration::seconds(10), created_by: client_a,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool, PushRequest { client_id: client_a, revisions: vec![root.clone()] },
+    ).await.unwrap();
+
+    // rev_b created AFTER t0 — passes the Gt(t0) filter
+    let rev_b = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Update(root.id),
+        created_at: t0 + chrono::Duration::seconds(1), created_by: client_b,
+        content: Content::Active(serde_json::json!({})),
+    };
+    // rev_c created BEFORE t0 — fails the Gt(t0) filter
+    let rev_c = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Update(root.id),
+        created_at: t0 - chrono::Duration::seconds(1), created_by: client_c,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool, PushRequest { client_id: client_b, revisions: vec![rev_b] },
+    ).await.unwrap();
+    rustend_server::db::push::push_revisions(
+        &store.pool, PushRequest { client_id: client_c, revisions: vec![rev_c] },
+    ).await.unwrap();
+
+    // Filter: only revisions created after t0
+    let created_at_filter = vec![rustend_core::CreatedAtFilter::Gt(t0)];
+
+    let up_to = rustend_core::TransactionId(
+        rustend_server::db::transactions::latest_transaction_id(&store.pool).await.unwrap()
+    );
+    let updates = rustend_server::db::pull::fetch_object_updates(
+        &store.pool, client_a, None, up_to, None, Some(&created_at_filter), None,
+    ).await.unwrap();
+
+    assert_eq!(updates.len(), 1, "the object should be returned (rev_b matches the filter)");
+    assert_eq!(updates[0].action, HeadAction::Conflict,
+        "conflict must be visible even when only one head matches the created_at filter");
+    assert_eq!(updates[0].heads.len(), 2,
+        "both heads must be present");
+}

@@ -83,29 +83,25 @@ pub async fn fetch_object_updates(
                 None => continue,
             };
 
-            if let Some(types) = object_types {
-                if !types.contains(&row.object_type) {
-                    continue;
-                }
-            }
-
-            if let Some(filters) = created_at_filters {
-                if !apply_created_at_filters(row.created_at, filters) {
-                    continue;
-                }
-            }
-
-            let content_passes = match &row.data {
-                Some(data) => content_filter
-                    .map(|f| apply_content_filter(data, f))
-                    .unwrap_or(true),
+            // Check all filter criteria for this head
+            let head_passes = match object_types {
+                Some(types) if !types.contains(&row.object_type) => false,
+                _ => true,
+            } && match created_at_filters {
+                Some(filters) => apply_created_at_filters(row.created_at, filters),
                 None => true,
+            } && match (&row.data, content_filter) {
+                (Some(data), Some(f)) => apply_content_filter(data, f),
+                (None, Some(_)) => true,
+                _ => true,
             };
 
-            if content_passes {
+            if head_passes {
                 passes_filter = true;
             }
 
+            // Always collect this head — if any head matches, all heads are
+            // returned so conflicts remain visible.
             let parents = parents_map.get(&row.id).cloned().unwrap_or_default();
             let revision = row_to_revision_sync(row, parents);
             head_revisions.push(revision);
