@@ -128,7 +128,7 @@ impl Repository {
                 }
                 Content::Deleted => VersionContent::Deleted,
             };
-            Ok(ObjectVersion { revision_id: h.revision_id, content })
+            Ok(ObjectVersion { object_id, revision_id: h.revision_id, content })
         }).collect()
     }
 
@@ -184,7 +184,7 @@ impl Repository {
                 }
                 Content::Deleted => VersionContent::Deleted,
             };
-            Ok(ObjectVersion { revision_id: head.revision_id, content })
+            Ok(ObjectVersion { object_id: head.object_id, revision_id: head.revision_id, content })
         }).collect()
     }
 

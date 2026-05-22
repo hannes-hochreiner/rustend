@@ -1,7 +1,8 @@
-use rustend_core::{RejectedRevision, RevisionId};
+use rustend_core::{ObjectId, RejectedRevision, RevisionId};
 
 #[derive(Debug, Clone)]
 pub struct ObjectVersion<T> {
+    pub object_id:   ObjectId,
     pub revision_id: RevisionId,
     pub content:     VersionContent<T>,
 }

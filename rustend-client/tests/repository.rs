@@ -97,3 +97,21 @@ async fn repository_exposes_client_id_after_open() {
         .expect("reopen failed");
     assert_eq!(repo.client_id(), repo2.client_id());
 }
+
+#[wasm_bindgen_test]
+async fn query_by_index_returns_object_id() {
+    let schema = IndexSchema::new().add("by_year", "trip", "$.year");
+    let repo = Repository::open("test-db-obj-id", schema)
+        .await
+        .expect("open failed");
+
+    let trip = Trip { name: "Paris".into(), year: 2024 };
+    let (saved_id, _) = repo.save("trip", &trip).await.expect("save");
+
+    let results = repo
+        .query_by_index::<Trip>("by_year", IndexRange::Eq(serde_json::json!(2024)))
+        .await
+        .expect("query");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].object_id, saved_id);
+}
