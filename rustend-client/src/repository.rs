@@ -16,6 +16,20 @@ use crate::{
     types::{IndexRange, ObjectVersion, SyncResult, VersionContent},
 };
 
+fn check_parents_are_heads(
+    heads: &[crate::idb::object_heads::HeadRecord],
+    parents: &[RevisionId],
+) -> Result<(), RustendClientError> {
+    let head_ids: std::collections::HashSet<RevisionId> =
+        heads.iter().map(|h| h.revision_id).collect();
+    for p in parents {
+        if !head_ids.contains(p) {
+            return Err(RustendClientError::StaleParent);
+        }
+    }
+    Ok(())
+}
+
 pub struct Repository {
     db:        Database,
     client_id: ClientId,
@@ -71,6 +85,7 @@ impl Repository {
     ) -> Result<RevisionId, RustendClientError> {
         let data = serde_json::to_value(value)?;
         let heads = idb_heads::get_heads(&self.db, object_id).await?;
+        check_parents_are_heads(&heads, &[parent])?;
         let object_type = heads.first()
             .map(|h| h.object_type.clone())
             .ok_or(RustendClientError::NotCached)?;
@@ -96,6 +111,7 @@ impl Repository {
         parent: RevisionId,
     ) -> Result<RevisionId, RustendClientError> {
         let heads = idb_heads::get_heads(&self.db, object_id).await?;
+        check_parents_are_heads(&heads, &[parent])?;
         let object_type = heads.first()
             .map(|h| h.object_type.clone())
             .ok_or(RustendClientError::NotCached)?;
@@ -200,6 +216,7 @@ impl Repository {
             ));
         }
         let heads = idb_heads::get_heads(&self.db, object_id).await?;
+        check_parents_are_heads(&heads, parents)?;
         let object_type = heads.first()
             .map(|h| h.object_type.clone())
             .ok_or(RustendClientError::NotCached)?;

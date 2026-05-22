@@ -13,6 +13,8 @@ pub enum RustendClientError {
     Rejected(RejectionReason),
     #[error("object not in local cache")]
     NotCached,
+    #[error("parent revision is not a current head")]
+    StaleParent,
 }
 
 impl From<idb::Error> for RustendClientError {

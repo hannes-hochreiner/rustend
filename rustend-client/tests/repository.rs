@@ -115,3 +115,34 @@ async fn query_by_index_returns_object_id() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].object_id, saved_id);
 }
+
+#[wasm_bindgen_test]
+async fn update_rejects_stale_parent() {
+    let repo = Repository::open("test-db-stale-update", IndexSchema::new())
+        .await.expect("open");
+    let trip = Trip { name: "Paris".into(), year: 2024 };
+    let (object_id, rev1) = repo.save("trip", &trip).await.expect("save");
+    // Create a second revision (now rev1 is stale)
+    let trip2 = Trip { name: "London".into(), year: 2024 };
+    let _rev2 = repo.update(object_id, rev1, &trip2).await.expect("first update");
+    // Trying to update again using rev1 (now stale) should fail
+    let trip3 = Trip { name: "Berlin".into(), year: 2024 };
+    let result = repo.update(object_id, rev1, &trip3).await;
+    assert!(result.is_err(), "expected StaleParent error");
+}
+
+#[wasm_bindgen_test]
+async fn resolve_conflict_rejects_unrelated_parents() {
+    let repo = Repository::open("test-db-stale-conflict", IndexSchema::new())
+        .await.expect("open");
+    let trip = Trip { name: "Paris".into(), year: 2024 };
+    let (object_id, rev1) = repo.save("trip", &trip).await.expect("save");
+    // resolve_conflict with a parent that isn't a current head
+    let fake_rev = rustend_core::RevisionId::new();
+    let result = repo.resolve_conflict(
+        object_id,
+        &[rev1, fake_rev],
+        rustend_client::VersionContent::Active(trip),
+    ).await;
+    assert!(result.is_err(), "expected StaleParent error for unrelated parent");
+}
