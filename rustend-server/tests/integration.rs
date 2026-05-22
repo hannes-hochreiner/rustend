@@ -166,3 +166,31 @@ async fn object_endpoint_requires_registered_client() {
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn pull_rejects_out_of_range_transaction_id() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let (store, _container) = setup().await;
+    let client_id = rustend_core::ClientId::new();
+    rustend_server::db::clients::register_client(&store.pool, client_id).await.unwrap();
+
+    let app = rustend_server::router(store);
+
+    // u64::MAX overflows i64 when cast, turning into -1 which matches everything
+    let body = serde_json::json!({
+        "client_id": client_id,
+        "since": u64::MAX,
+    });
+
+    let resp = app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/changes/query")
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

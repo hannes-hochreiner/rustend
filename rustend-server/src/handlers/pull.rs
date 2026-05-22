@@ -10,6 +10,14 @@ pub async fn pull_changes(
         return Err(ServerError::UnknownClient);
     }
 
+    if let Some(since) = req.since {
+        if since.0 > i64::MAX as u64 {
+            return Err(ServerError::MalformedData(
+                "since transaction ID out of range".into(),
+            ));
+        }
+    }
+
     let object_updates = db::pull::fetch_object_updates(
         &store.pool,
         req.client_id,
