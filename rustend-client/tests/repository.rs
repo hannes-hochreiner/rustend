@@ -85,3 +85,15 @@ async fn index_query_returns_matching_objects() {
         VersionContent::Deleted   => panic!("expected Active"),
     }
 }
+
+#[wasm_bindgen_test]
+async fn repository_exposes_client_id_after_open() {
+    let repo = Repository::open("test-db-client-id", IndexSchema::new())
+        .await
+        .expect("open failed");
+    // Reopen should return same ID (stored in IndexedDB)
+    let repo2 = Repository::open("test-db-client-id", IndexSchema::new())
+        .await
+        .expect("reopen failed");
+    assert_eq!(repo.client_id(), repo2.client_id());
+}

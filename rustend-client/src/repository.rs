@@ -249,6 +249,29 @@ impl Repository {
         idb_files::delete_file(&self.db, object_id).await
     }
 
+    pub async fn register(
+        &mut self,
+        server_url: &str,
+    ) -> Result<(), RustendClientError> {
+        let url = format!("{}/clients", server_url.trim_end_matches('/'));
+        let resp = gloo_net::http::Request::post(&url)
+            .send()
+            .await
+            .map_err(|e| RustendClientError::Network(e.to_string()))?;
+        if !resp.ok() {
+            return Err(RustendClientError::Network(
+                format!("register failed: {}", resp.status()),
+            ));
+        }
+        let server_id: rustend_core::ClientId = resp
+            .json()
+            .await
+            .map_err(|e| RustendClientError::Network(e.to_string()))?;
+        self.client_id = server_id;
+        sync_state::write_sync_state(&self.db, server_id, None).await?;
+        Ok(())
+    }
+
     pub async fn sync(
         &self,
         server_url: &str,
