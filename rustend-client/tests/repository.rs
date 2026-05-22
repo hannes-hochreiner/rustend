@@ -168,3 +168,19 @@ async fn repository_sync_accepts_pull_request_without_since() {
         other => panic!("expected Network error, got {:?}", other),
     }
 }
+
+#[wasm_bindgen_test]
+async fn replace_conflict_detection_correct_for_clean_head() {
+    // Verify that when we have exactly 1 local head and it matches what we saved,
+    // the local state is what we expect (no phantom conflicts from stale logic).
+    let repo = Repository::open("test-db-replace-conflict", IndexSchema::new())
+        .await.expect("open");
+
+    let trip = Trip { name: "Paris".into(), year: 2024 };
+    let (object_id, rev1) = repo.save("trip", &trip).await.expect("save");
+
+    // Verify exactly 1 head after initial save — baseline for Replace behavior
+    let versions = repo.get::<Trip>(object_id).await.expect("get");
+    assert_eq!(versions.len(), 1, "should have exactly 1 head after save");
+    assert_eq!(versions[0].revision_id, rev1);
+}

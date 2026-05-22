@@ -99,11 +99,21 @@ async fn pull_updates(
         match update.action {
             HeadAction::Replace => {
                 let existing = idb_heads::get_heads(db, update.object_id).await?;
-                let has_pending = existing.iter().any(|h| {
-                    !update.heads.iter().any(|r| r.id == h.revision_id)
+
+                // The incoming revision IDs and the IDs they supersede (their parents)
+                let incoming_ids: std::collections::HashSet<rustend_core::RevisionId> =
+                    update.heads.iter().map(|r| r.id).collect();
+                let superseded_ids: std::collections::HashSet<rustend_core::RevisionId> =
+                    update.heads.iter().flat_map(|r| r.lineage.parents()).collect();
+
+                // A real local conflict exists only when we have an existing head that is
+                // neither the incoming revision itself nor a parent of any incoming revision.
+                let has_diverged = existing.iter().any(|h| {
+                    !incoming_ids.contains(&h.revision_id)
+                        && !superseded_ids.contains(&h.revision_id)
                 });
 
-                if has_pending {
+                if has_diverged {
                     idb_heads::add_heads(db, &update.heads).await?;
                     conflicted += 1;
                 } else {
