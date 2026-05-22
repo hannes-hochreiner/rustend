@@ -18,7 +18,7 @@ impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             ServerError::Database(_) =>
-                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
             ServerError::UnknownClient =>
                 (StatusCode::UNAUTHORIZED, self.to_string()),
             ServerError::DuplicateRevision =>

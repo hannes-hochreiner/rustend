@@ -109,3 +109,17 @@ async fn conflicting_updates_produce_conflict_action() {
     assert_eq!(update.action, HeadAction::Conflict);
     assert_eq!(update.heads.len(), 2);
 }
+
+#[tokio::test]
+async fn database_error_response_is_generic() {
+    use rustend_server::error::ServerError;
+    use axum::response::IntoResponse;
+
+    let err = ServerError::Database(sqlx::Error::PoolTimedOut);
+    let resp = err.into_response();
+    assert_eq!(resp.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let msg = json["error"].as_str().unwrap();
+    assert_eq!(msg, "internal server error", "leaked: {msg}");
+}
