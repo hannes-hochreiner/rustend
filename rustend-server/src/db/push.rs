@@ -55,12 +55,10 @@ pub async fn push_revisions(
             // Check existence: in-batch first, then DB
             let parent_object_id = if let Some(&oid) = accepted_objects.get(parent_id) {
                 Some(oid)
-            } else if db::revisions::revision_exists(pool, *parent_id).await? {
+            } else {
                 db::revisions::get_revision_object_id(pool, parent_id.0)
                     .await?
                     .map(ObjectId)
-            } else {
-                None
             };
 
             match parent_object_id {

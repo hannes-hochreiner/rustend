@@ -276,6 +276,7 @@ async fn push_rejects_cross_object_parent() {
         PushRequest { client_id: client, revisions: vec![bad_rev] },
     ).await.unwrap();
     assert_eq!(resp.rejected.len(), 1);
+    assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
 }
 
 #[tokio::test]

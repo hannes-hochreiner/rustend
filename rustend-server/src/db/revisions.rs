@@ -10,10 +10,6 @@ pub async fn revision_exists(pool: &PgPool, id: RevisionId) -> Result<bool, sqlx
     Ok(row.is_some())
 }
 
-pub async fn parent_exists(pool: &PgPool, id: RevisionId) -> Result<bool, sqlx::Error> {
-    revision_exists(pool, id).await
-}
-
 pub async fn insert_revision(
     tx: &mut Transaction<'_, Postgres>,
     rev: &Revision,
