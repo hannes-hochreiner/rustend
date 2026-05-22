@@ -25,9 +25,11 @@ pub async fn get_object(
     }
 
     let revision_rows = db::revisions::get_revision_rows_by_ids(&store.pool, &head_ids).await?;
+    let ids: Vec<uuid::Uuid> = revision_rows.iter().map(|r| r.id).collect();
+    let parents_map = db::revisions::get_parents_batch(&store.pool, &ids).await?;
     let mut heads = Vec::new();
     for row in revision_rows {
-        let parents = db::revisions::get_parents(&store.pool, row.id).await?;
+        let parents = parents_map.get(&row.id).cloned().unwrap_or_default();
         let rev = db::revisions::row_to_revision_sync(row, parents);
         heads.push(rev);
     }

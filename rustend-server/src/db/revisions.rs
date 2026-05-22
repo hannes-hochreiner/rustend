@@ -103,6 +103,31 @@ pub async fn get_parents(
     Ok(rows.into_iter().map(|r| r.get("parent_id")).collect())
 }
 
+pub async fn get_parents_batch(
+    pool: &PgPool,
+    revision_ids: &[uuid::Uuid],
+) -> Result<std::collections::HashMap<uuid::Uuid, Vec<uuid::Uuid>>, sqlx::Error> {
+    if revision_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT revision_id, parent_id FROM revision_parents \
+         WHERE revision_id = ANY($1) ORDER BY revision_id, position"
+    )
+    .bind(revision_ids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut map: std::collections::HashMap<uuid::Uuid, Vec<uuid::Uuid>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let rid: uuid::Uuid = row.get("revision_id");
+        let pid: uuid::Uuid = row.get("parent_id");
+        map.entry(rid).or_default().push(pid);
+    }
+    Ok(map)
+}
+
 pub fn row_to_revision_sync(
     row: RevisionRow,
     parents: Vec<uuid::Uuid>,

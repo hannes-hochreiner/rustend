@@ -4,7 +4,7 @@ use rustend_core::{
     HeadAction, ObjectId, ObjectUpdate, Revision, TransactionId,
 };
 use uuid::Uuid;
-use crate::db::revisions::{get_revision_rows_by_ids, get_parents, row_to_revision_sync};
+use crate::db::revisions::{get_revision_rows_by_ids, get_parents_batch, row_to_revision_sync};
 
 pub async fn fetch_object_updates(
     pool: &PgPool,
@@ -65,6 +65,7 @@ pub async fn fetch_object_updates(
     let revision_rows = get_revision_rows_by_ids(pool, &all_head_ids).await?;
     let mut rows_by_id: std::collections::HashMap<Uuid, _> =
         revision_rows.into_iter().map(|r| (r.id, r)).collect();
+    let parents_map = get_parents_batch(pool, &all_head_ids).await?;
 
     let mut updates = Vec::new();
     for object_id in &changed_objects {
@@ -105,7 +106,7 @@ pub async fn fetch_object_updates(
                 passes_filter = true;
             }
 
-            let parents = get_parents(pool, row.id).await?;
+            let parents = parents_map.get(&row.id).cloned().unwrap_or_default();
             let revision = row_to_revision_sync(row, parents);
             head_revisions.push(revision);
         }

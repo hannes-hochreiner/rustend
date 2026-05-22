@@ -433,3 +433,38 @@ async fn merge_parent_order_is_preserved() {
     assert_eq!(parents, vec![root_a.id.0, root_b.id.0, root_c.id.0],
         "merge parent order must be preserved");
 }
+
+#[tokio::test]
+async fn get_parents_batch_matches_individual_queries() {
+    let (store, _container) = setup().await;
+    let client = rustend_core::ClientId::new();
+    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+
+    let object_id = ObjectId::new();
+    let root = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    let update = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(),
+        lineage: Lineage::Update(root.id),
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![root.clone(), update.clone()] },
+    ).await.unwrap();
+
+    let batch = rustend_server::db::revisions::get_parents_batch(
+        &store.pool, &[root.id.0, update.id.0],
+    ).await.unwrap();
+
+    let root_parents = batch.get(&root.id.0).cloned().unwrap_or_default();
+    let update_parents = batch.get(&update.id.0).cloned().unwrap_or_default();
+    assert!(root_parents.is_empty());
+    assert_eq!(update_parents, vec![root.id.0]);
+}
