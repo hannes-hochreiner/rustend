@@ -385,3 +385,51 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
     // Only 2 updates (the late push is excluded by the upper bound)
     assert_eq!(updates.len(), 2, "up_to upper bound must exclude transactions after watermark");
 }
+
+#[tokio::test]
+async fn merge_parent_order_is_preserved() {
+    let (store, _container) = setup().await;
+    let client = rustend_core::ClientId::new();
+    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+
+    let object_id = ObjectId::new();
+    let root_a = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    let root_b = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    let root_c = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![root_a.clone(), root_b.clone(), root_c.clone()] },
+    ).await.unwrap();
+
+    let merge = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(),
+        lineage: Lineage::Merge(root_a.id, root_b.id, vec![root_c.id]),
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![merge.clone()] },
+    ).await.unwrap();
+
+    let parents = rustend_server::db::revisions::get_parents(&store.pool, merge.id.0)
+        .await.unwrap();
+    assert_eq!(parents, vec![root_a.id.0, root_b.id.0, root_c.id.0],
+        "merge parent order must be preserved");
+}

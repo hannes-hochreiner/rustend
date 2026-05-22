@@ -33,12 +33,13 @@ pub async fn insert_revision(
     .execute(&mut **tx)
     .await?;
 
-    for parent_id in rev.lineage.parents() {
+    for (pos, parent_id) in rev.lineage.parents().iter().enumerate() {
         sqlx::query(
-            "INSERT INTO revision_parents (revision_id, parent_id) VALUES ($1, $2)"
+            "INSERT INTO revision_parents (revision_id, parent_id, position) VALUES ($1, $2, $3)"
         )
         .bind(rev.id.0)
         .bind(parent_id.0)
+        .bind(pos as i16)
         .execute(&mut **tx)
         .await?;
     }
@@ -94,7 +95,7 @@ pub async fn get_parents(
     revision_id: uuid::Uuid,
 ) -> Result<Vec<uuid::Uuid>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT parent_id FROM revision_parents WHERE revision_id = $1"
+        "SELECT parent_id FROM revision_parents WHERE revision_id = $1 ORDER BY position"
     )
     .bind(revision_id)
     .fetch_all(pool)

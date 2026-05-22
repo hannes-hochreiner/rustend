@@ -1,0 +1,1 @@
+ALTER TABLE revision_parents ADD COLUMN position SMALLINT NOT NULL DEFAULT 0;
