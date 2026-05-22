@@ -123,3 +123,46 @@ async fn database_error_response_is_generic() {
     let msg = json["error"].as_str().unwrap();
     assert_eq!(msg, "internal server error", "leaked: {msg}");
 }
+
+#[tokio::test]
+async fn file_endpoints_require_registered_client() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let (store, _container) = setup().await;
+    let app = rustend_server::router(store);
+    let object_uuid = uuid::Uuid::new_v4();
+
+    // GET without client_id query param → 401
+    let resp = app.clone().oneshot(
+        Request::builder()
+            .uri(format!("/files/{}", object_uuid))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // GET with unknown client_id → 401
+    let resp = app.clone().oneshot(
+        Request::builder()
+            .uri(format!("/files/{}?client_id={}", object_uuid, uuid::Uuid::new_v4()))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn object_endpoint_requires_registered_client() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let (store, _container) = setup().await;
+    let app = rustend_server::router(store);
+    let object_uuid = uuid::Uuid::new_v4();
+
+    let resp = app.oneshot(
+        Request::builder()
+            .uri(format!("/objects/{}", object_uuid))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
