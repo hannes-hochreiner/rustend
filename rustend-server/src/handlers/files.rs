@@ -10,17 +10,14 @@ use rustend_core::ClientId;
 
 pub(crate) fn extract_client_id(uri: &Uri) -> Result<ClientId, ServerError> {
     let query = uri.query().ok_or(ServerError::UnknownClient)?;
-    for pair in query.split('&') {
-        if let Some(val) = pair.strip_prefix("client_id=") {
-            return uuid::Uuid::parse_str(val)
-                .map(ClientId)
-                .map_err(|_| ServerError::UnknownClient);
-        }
-    }
-    Err(ServerError::UnknownClient)
+    form_urlencoded::parse(query.as_bytes())
+        .find(|(k, _)| k == "client_id")
+        .and_then(|(_, v)| uuid::Uuid::parse_str(&v).ok())
+        .map(ClientId)
+        .ok_or(ServerError::UnknownClient)
 }
 
-async fn require_client(
+pub(crate) async fn require_client(
     pool: &sqlx::PgPool,
     uri: &Uri,
 ) -> Result<ClientId, ServerError> {
