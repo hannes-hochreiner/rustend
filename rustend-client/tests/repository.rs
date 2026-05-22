@@ -146,3 +146,25 @@ async fn resolve_conflict_rejects_unrelated_parents() {
     ).await;
     assert!(result.is_err(), "expected StaleParent error for unrelated parent");
 }
+
+#[wasm_bindgen_test]
+async fn repository_sync_accepts_pull_request_without_since() {
+    use rustend_core::PullRequest;
+    let repo = Repository::open("test-db-sync-nosince", IndexSchema::new())
+        .await.expect("open");
+    // Calling sync with an unreachable URL should fail at the network level.
+    let params = PullRequest {
+        client_id: repo.client_id(),
+        since:        None,
+        object_types: None,
+        created_at:   None,
+        filter:       None,
+    };
+    let result = repo.sync("http://localhost:0", params).await;
+    // We expect a network error, not a logic panic.
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        rustend_client::RustendClientError::Network(_) => {}
+        other => panic!("expected Network error, got {:?}", other),
+    }
+}

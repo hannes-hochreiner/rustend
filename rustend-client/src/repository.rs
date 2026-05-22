@@ -292,8 +292,12 @@ impl Repository {
     pub async fn sync(
         &self,
         server_url: &str,
-        pull_params: PullRequest,
+        mut pull_params: PullRequest,
     ) -> Result<SyncResult, RustendClientError> {
+        if pull_params.since.is_none() {
+            let (_, last_txn) = sync_state::read_sync_state(&self.db).await?;
+            pull_params.since = last_txn;
+        }
         crate::sync::sync(&self.db, self.client_id, server_url, pull_params).await
     }
 }
