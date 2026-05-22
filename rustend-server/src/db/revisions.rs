@@ -82,6 +82,17 @@ pub async fn get_revision_rows_by_ids(
     }).collect())
 }
 
+pub async fn get_revision_object_id(
+    pool: &PgPool,
+    revision_id: uuid::Uuid,
+) -> Result<Option<uuid::Uuid>, sqlx::Error> {
+    let row = sqlx::query("SELECT object_id FROM revisions WHERE id = $1")
+        .bind(revision_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get("object_id")))
+}
+
 pub async fn get_parents(
     pool: &PgPool,
     revision_id: uuid::Uuid,

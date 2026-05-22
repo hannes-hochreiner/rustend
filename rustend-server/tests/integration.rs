@@ -194,3 +194,118 @@ async fn pull_rejects_out_of_range_transaction_id() {
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn push_rejects_spoofed_created_by() {
+    let (store, _container) = setup().await;
+    let client_a = rustend_core::ClientId::new();
+    let client_b = rustend_core::ClientId::new();
+    for c in [client_a, client_b] {
+        rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
+    }
+    let rev = Revision {
+        id: RevisionId::new(), object_id: ObjectId::new(),
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(),
+        created_by: client_b,    // claims to be client_b
+        content: Content::Active(serde_json::json!({})),
+    };
+    // pushed by client_a
+    let resp = rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client_a, revisions: vec![rev] },
+    ).await.unwrap();
+    assert_eq!(resp.rejected.len(), 1);
+    assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
+}
+
+#[tokio::test]
+async fn push_accepts_intra_batch_parent() {
+    let (store, _container) = setup().await;
+    let client = rustend_core::ClientId::new();
+    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    let object_id = ObjectId::new();
+    let root = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({"v": 1})),
+    };
+    let update = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(),
+        lineage: Lineage::Update(root.id),
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({"v": 2})),
+    };
+    let resp = rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![root, update] },
+    ).await.unwrap();
+    assert_eq!(resp.accepted.len(), 2);
+    assert!(resp.rejected.is_empty());
+}
+
+#[tokio::test]
+async fn push_rejects_cross_object_parent() {
+    let (store, _container) = setup().await;
+    let client = rustend_core::ClientId::new();
+    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    let object_a = ObjectId::new();
+    let root_a = Revision {
+        id: RevisionId::new(), object_id: object_a,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![root_a.clone()] },
+    ).await.unwrap();
+    // Revision for object_b with parent from object_a
+    let object_b = ObjectId::new();
+    let bad_rev = Revision {
+        id: RevisionId::new(), object_id: object_b,
+        object_type: "trip".into(),
+        lineage: Lineage::Update(root_a.id),
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    let resp = rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![bad_rev] },
+    ).await.unwrap();
+    assert_eq!(resp.rejected.len(), 1);
+}
+
+#[tokio::test]
+async fn push_rejects_duplicate_merge_parents() {
+    let (store, _container) = setup().await;
+    let client = rustend_core::ClientId::new();
+    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    let object_id = ObjectId::new();
+    let root = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![root.clone()] },
+    ).await.unwrap();
+    // Merge with same parent twice
+    let merge = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(),
+        lineage: Lineage::Merge(root.id, root.id, vec![]),
+        created_at: chrono::Utc::now(), created_by: client,
+        content: Content::Active(serde_json::json!({})),
+    };
+    let resp = rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client, revisions: vec![merge] },
+    ).await.unwrap();
+    assert_eq!(resp.rejected.len(), 1);
+    assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
+}
