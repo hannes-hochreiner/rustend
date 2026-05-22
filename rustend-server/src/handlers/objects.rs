@@ -21,7 +21,7 @@ pub async fn get_object(
     tx.commit().await?;
 
     if head_ids.is_empty() {
-        return Err(ServerError::MalformedData("object not found".into()));
+        return Err(ServerError::NotFound);
     }
 
     let revision_rows = db::revisions::get_revision_rows_by_ids(&store.pool, &head_ids).await?;

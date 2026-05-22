@@ -12,6 +12,8 @@ pub enum ServerError {
     UnknownParent(String),
     #[error("malformed data: {0}")]
     MalformedData(String),
+    #[error("not found")]
+    NotFound,
 }
 
 impl IntoResponse for ServerError {
@@ -27,6 +29,8 @@ impl IntoResponse for ServerError {
                 (StatusCode::UNPROCESSABLE_ENTITY, self.to_string()),
             ServerError::MalformedData(_) =>
                 (StatusCode::BAD_REQUEST, self.to_string()),
+            ServerError::NotFound =>
+                (StatusCode::NOT_FOUND, self.to_string()),
         };
         (status, Json(serde_json::json!({"error": message}))).into_response()
     }

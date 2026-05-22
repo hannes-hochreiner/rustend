@@ -310,3 +310,23 @@ async fn push_rejects_duplicate_merge_parents() {
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
 }
+
+#[tokio::test]
+async fn get_object_returns_404_for_unknown_id() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let (store, _container) = setup().await;
+    let client = rustend_core::ClientId::new();
+    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+
+    let app = rustend_server::router(store);
+    let unknown_object = uuid::Uuid::new_v4();
+
+    let resp = app.oneshot(
+        Request::builder()
+            .uri(format!("/objects/{}?client_id={}", unknown_object, client.0))
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
