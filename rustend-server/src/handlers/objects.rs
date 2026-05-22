@@ -1,15 +1,19 @@
-use axum::{extract::{Path, State}, Json};
-use rustend_core::{ClientId, HeadAction, ObjectId, ObjectUpdate};
+use axum::{
+    extract::{Path, State},
+    http::Uri,
+    Json,
+};
+use rustend_core::{HeadAction, ObjectId, ObjectUpdate};
 use uuid::Uuid;
 use crate::{error::ServerError, store::ServerStore, db};
-use super::files::OptionalClientId;
+use super::files::extract_client_id;
 
 pub async fn get_object(
     State(store): State<ServerStore>,
-    maybe: OptionalClientId,
+    uri: Uri,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ObjectUpdate>, ServerError> {
-    let client_id: ClientId = maybe.0.ok_or(ServerError::UnknownClient)?;
+    let client_id = extract_client_id(&uri)?;
     if !db::clients::client_exists(&store.pool, client_id).await? {
         return Err(ServerError::UnknownClient);
     }
