@@ -14,8 +14,8 @@ pub async fn sync(
     server_url: &str,
     pull_params: PullRequest,
 ) -> Result<SyncResult, RustendClientError> {
-    let pushed = push_pending(db, client_id, server_url).await?;
-    let (pulled, conflicted, rejected) = pull_updates(db, server_url, pull_params).await?;
+    let (pushed, rejected) = push_pending(db, client_id, server_url).await?;
+    let (pulled, conflicted) = pull_updates(db, server_url, pull_params).await?;
     Ok(SyncResult { pushed, pulled, conflicted, rejected })
 }
 
@@ -23,10 +23,10 @@ async fn push_pending(
     db: &Database,
     client_id: ClientId,
     server_url: &str,
-) -> Result<u32, RustendClientError> {
+) -> Result<(u32, Vec<rustend_core::RejectedRevision>), RustendClientError> {
     let pending = idb_revisions::get_pending_revisions(db).await?;
     if pending.is_empty() {
-        return Ok(0);
+        return Ok((0, vec![]));
     }
 
     let revisions: Vec<Revision> = pending.iter().map(|r| r.revision()).collect();
@@ -59,14 +59,14 @@ async fn push_pending(
             .await?;
     }
 
-    Ok(push_resp.accepted.len() as u32)
+    Ok((push_resp.accepted.len() as u32, push_resp.rejected))
 }
 
 async fn pull_updates(
     db: &Database,
     server_url: &str,
     pull_params: PullRequest,
-) -> Result<(u32, u32, Vec<rustend_core::RejectedRevision>), RustendClientError> {
+) -> Result<(u32, u32), RustendClientError> {
     let url = format!("{}/changes/query", server_url.trim_end_matches('/'));
     let resp = gloo_net::http::Request::post(&url)
         .json(&pull_params)
@@ -132,5 +132,5 @@ async fn pull_updates(
         sync_state::write_sync_state(db, cid, Some(pull_resp.up_to_transaction)).await?;
     }
 
-    Ok((pulled, conflicted, vec![]))
+    Ok((pulled, conflicted))
 }

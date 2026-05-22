@@ -184,3 +184,15 @@ async fn replace_conflict_detection_correct_for_clean_head() {
     assert_eq!(versions.len(), 1, "should have exactly 1 head after save");
     assert_eq!(versions[0].revision_id, rev1);
 }
+
+#[wasm_bindgen_test]
+async fn sync_result_has_rejected_field() {
+    // Structural test: verify SyncResult.rejected is accessible (type-level check)
+    let result = rustend_client::SyncResult {
+        pushed: 0,
+        pulled: 0,
+        conflicted: 0,
+        rejected: vec![],
+    };
+    assert_eq!(result.rejected.len(), 0);
+}
