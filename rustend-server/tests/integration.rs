@@ -44,8 +44,11 @@ async fn push_creates_revision_and_pull_returns_it() {
     assert_eq!(push_resp.accepted.len(), 1);
     assert!(push_resp.rejected.is_empty());
 
+    let up_to = rustend_core::TransactionId(
+        rustend_server::db::transactions::latest_transaction_id(&store.pool).await.unwrap()
+    );
     let updates = rustend_server::db::pull::fetch_object_updates(
-        &store.pool, client_b, None, None, None, None,
+        &store.pool, client_b, None, up_to, None, None, None,
     ).await.unwrap();
 
     assert_eq!(updates.len(), 1);
@@ -102,8 +105,11 @@ async fn conflicting_updates_produce_conflict_action() {
         PushRequest { client_id: client_c, revisions: vec![rev_c] },
     ).await.unwrap();
 
+    let up_to = rustend_core::TransactionId(
+        rustend_server::db::transactions::latest_transaction_id(&store.pool).await.unwrap()
+    );
     let updates = rustend_server::db::pull::fetch_object_updates(
-        &store.pool, client_a, None, None, None, None,
+        &store.pool, client_a, None, up_to, None, None, None,
     ).await.unwrap();
     let update = updates.iter().find(|u| u.object_id == object_id).unwrap();
     assert_eq!(update.action, HeadAction::Conflict);
@@ -329,4 +335,38 @@ async fn get_object_returns_404_for_unknown_id() {
             .body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn pull_up_to_transaction_covers_all_returned_updates() {
+    let (store, _container) = setup().await;
+    let client_a = rustend_core::ClientId::new();
+    let client_b = rustend_core::ClientId::new();
+    for c in [client_a, client_b] {
+        rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
+    }
+
+    // Push two revisions as client_a
+    for _ in 0..2 {
+        let rev = Revision {
+            id: RevisionId::new(), object_id: ObjectId::new(),
+            object_type: "trip".into(), lineage: Lineage::Root,
+            created_at: chrono::Utc::now(), created_by: client_a,
+            content: Content::Active(serde_json::json!({})),
+        };
+        rustend_server::db::push::push_revisions(
+            &store.pool,
+            PushRequest { client_id: client_a, revisions: vec![rev] },
+        ).await.unwrap();
+    }
+
+    let up_to = rustend_core::TransactionId(
+        rustend_server::db::transactions::latest_transaction_id(&store.pool).await.unwrap()
+    );
+    let updates = rustend_server::db::pull::fetch_object_updates(
+        &store.pool, client_b, None, up_to, None, None, None,
+    ).await.unwrap();
+
+    // All returned updates belong to transactions <= up_to
+    assert_eq!(updates.len(), 2);
 }

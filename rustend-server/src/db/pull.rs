@@ -10,11 +10,13 @@ pub async fn fetch_object_updates(
     pool: &PgPool,
     client_id: ClientId,
     since: Option<TransactionId>,
+    up_to: TransactionId,
     object_types: Option<&[String]>,
     created_at_filters: Option<&[CreatedAtFilter]>,
     content_filter: Option<&Vec<Vec<FilterCondition>>>,
 ) -> Result<Vec<ObjectUpdate>, sqlx::Error> {
     let since_id = since.map(|t| t.0 as i64).unwrap_or(0);
+    let up_to_id = up_to.0 as i64;
 
     let changed_rows = sqlx::query(
         r#"
@@ -23,10 +25,12 @@ pub async fn fetch_object_updates(
         JOIN transaction_revisions tr ON tr.revision_id = r.id
         JOIN transactions t ON t.id = tr.transaction_id
         WHERE t.id > $1
-          AND r.created_by != $2
+          AND t.id <= $2
+          AND r.created_by != $3
         "#
     )
     .bind(since_id)
+    .bind(up_to_id)
     .bind(client_id.0)
     .fetch_all(pool)
     .await?;

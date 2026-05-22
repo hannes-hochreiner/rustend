@@ -18,18 +18,19 @@ pub async fn pull_changes(
         }
     }
 
+    let up_to = TransactionId(
+        db::transactions::latest_transaction_id(&store.pool).await?
+    );
+
     let object_updates = db::pull::fetch_object_updates(
         &store.pool,
         req.client_id,
         req.since,
+        up_to,
         req.object_types.as_deref(),
         req.created_at.as_deref(),
         req.filter.as_ref(),
     ).await?;
-
-    let up_to = TransactionId(
-        db::transactions::latest_transaction_id(&store.pool).await?
-    );
 
     Ok(Json(PullResponse { up_to_transaction: up_to, object_updates }))
 }
