@@ -346,7 +346,7 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
         rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
     }
 
-    // Push two revisions as client_a
+    // Push two revisions as client_a, then capture the watermark
     for _ in 0..2 {
         let rev = Revision {
             id: RevisionId::new(), object_id: ObjectId::new(),
@@ -360,13 +360,28 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
         ).await.unwrap();
     }
 
+    // Capture the watermark BEFORE the third push
     let up_to = rustend_core::TransactionId(
         rustend_server::db::transactions::latest_transaction_id(&store.pool).await.unwrap()
     );
+
+    // Push a third revision AFTER capturing up_to — this must NOT appear in the results
+    let late_rev = Revision {
+        id: RevisionId::new(), object_id: ObjectId::new(),
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client_a,
+        content: Content::Active(serde_json::json!({})),
+    };
+    rustend_server::db::push::push_revisions(
+        &store.pool,
+        PushRequest { client_id: client_a, revisions: vec![late_rev] },
+    ).await.unwrap();
+
+    // Fetch as client_b using the pre-captured up_to
     let updates = rustend_server::db::pull::fetch_object_updates(
         &store.pool, client_b, None, up_to, None, None, None,
     ).await.unwrap();
 
-    // All returned updates belong to transactions <= up_to
-    assert_eq!(updates.len(), 2);
+    // Only 2 updates (the late push is excluded by the upper bound)
+    assert_eq!(updates.len(), 2, "up_to upper bound must exclude transactions after watermark");
 }

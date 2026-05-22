@@ -16,7 +16,9 @@ pub async fn fetch_object_updates(
     content_filter: Option<&Vec<Vec<FilterCondition>>>,
 ) -> Result<Vec<ObjectUpdate>, sqlx::Error> {
     let since_id = since.map(|t| t.0 as i64).unwrap_or(0);
-    let up_to_id = up_to.0 as i64;
+    let up_to_id: i64 = up_to.0.try_into().map_err(|_| sqlx::Error::Protocol(
+        "up_to transaction ID out of range".into(),
+    ))?;
 
     let changed_rows = sqlx::query(
         r#"
