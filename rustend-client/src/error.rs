@@ -15,6 +15,8 @@ pub enum RustendClientError {
     NotCached,
     #[error("parent revision is not a current head")]
     StaleParent,
+    #[error("object has unresolved conflicts; use resolve_conflict instead")]
+    ConflictExists,
 }
 
 impl From<idb::Error> for RustendClientError {

@@ -86,6 +86,9 @@ impl Repository {
     ) -> Result<RevisionId, RustendClientError> {
         let data = serde_json::to_value(value)?;
         let heads = idb_heads::get_heads(&self.db, object_id).await?;
+        if heads.len() > 1 {
+            return Err(RustendClientError::ConflictExists);
+        }
         check_parents_are_heads(&heads, &[parent])?;
         let object_type = heads.first()
             .map(|h| h.object_type.clone())
@@ -112,6 +115,9 @@ impl Repository {
         parent: RevisionId,
     ) -> Result<RevisionId, RustendClientError> {
         let heads = idb_heads::get_heads(&self.db, object_id).await?;
+        if heads.len() > 1 {
+            return Err(RustendClientError::ConflictExists);
+        }
         check_parents_are_heads(&heads, &[parent])?;
         let object_type = heads.first()
             .map(|h| h.object_type.clone())
@@ -170,7 +176,7 @@ impl Repository {
         let idx = store.index(index_name)
             .map_err(|e| RustendClientError::IndexedDb(format!("{:?}", e)))?;
 
-        let filter_by_type = matches!(&range, IndexRange::All);
+        let needs_type_filter = matches!(&range, IndexRange::All);
 
         let idb_range = match &range {
             IndexRange::All => None,
@@ -209,7 +215,7 @@ impl Repository {
                 };
                 // For IndexRange::All, filter by object_type here since the index scan
                 // returns all entries regardless of object_type
-                if filter_by_type && head.object_type != object_type {
+                if needs_type_filter && head.object_type != object_type {
                     return None;
                 }
                 let content = match head.content {
@@ -311,8 +317,9 @@ impl Repository {
             .json()
             .await
             .map_err(|e| RustendClientError::Network(e.to_string()))?;
+        let (_, existing_txn) = sync_state::read_sync_state(&self.db).await?;
         self.client_id = server_id;
-        sync_state::write_sync_state(&self.db, server_id, None).await?;
+        sync_state::write_sync_state(&self.db, server_id, existing_txn).await?;
         Ok(())
     }
 
