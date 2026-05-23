@@ -75,15 +75,16 @@ Steps:
 
 ### 5.3 `test-client`
 
-Runs the WASM browser tests for `rustend-client` using `wasm-pack` in headless Firefox mode. Firefox is pre-installed on `ubuntu-latest`. `wasm-pack` and `geckodriver` are not, so they are installed as explicit steps.
+Runs the WASM browser tests for `rustend-client` using `wasm-pack` in headless Firefox mode. Firefox is installed via `browser-actions/setup-firefox@v1` to ensure a stable, pinned version rather than relying on whatever is pre-installed on the runner. `wasm-pack` is installed via `taiki-e/install-action@v2`. `geckodriver` is installed via an inline shell step that fetches the latest release from the GitHub API (authenticated with `GITHUB_TOKEN`), verifies the SHA-256 checksum, and places the binary in `/usr/local/bin`.
 
 Steps:
 1. `actions/checkout@v4`
 2. `dtolnay/rust-toolchain@stable` with `targets: wasm32-unknown-unknown`
 3. `Swatinem/rust-cache@v2`
-4. Install `wasm-pack` via the official installer script
-5. Install `geckodriver` by downloading the latest release binary from GitHub Releases
-6. `wasm-pack test --firefox --headless rustend-client`
+4. `browser-actions/setup-firefox@v1` — install a stable Firefox
+5. `taiki-e/install-action@v2` with `tool: wasm-pack` — install wasm-pack
+6. Install `geckodriver`: authenticated GitHub API call + `jq` version parsing + SHA-256 checksum verification + extract to `/usr/local/bin`
+7. `wasm-pack test --firefox --headless rustend-client`
 
 ---
 
@@ -106,8 +107,10 @@ The cache key is derived from the OS, Rust toolchain version, and the hash of `C
 | `actions/checkout` | `v4` | Check out the repository |
 | `dtolnay/rust-toolchain` | `stable` | Install Rust stable toolchain |
 | `Swatinem/rust-cache` | `v2` | Cache Cargo registry and build artifacts |
+| `browser-actions/setup-firefox` | `v1` | Install a pinned Firefox for WASM browser tests |
+| `taiki-e/install-action` | `v2` | Install wasm-pack from its release artifacts |
 
-`wasm-pack` and `geckodriver` are installed via inline shell steps rather than third-party actions to avoid pinning to additional external action repositories.
+`geckodriver` is installed via an inline shell step (authenticated GitHub API + `jq` + SHA-256 verification).
 
 ---
 

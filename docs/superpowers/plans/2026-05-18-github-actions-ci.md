@@ -4,9 +4,9 @@
 
 **Goal:** Create a single GitHub Actions workflow that runs the full rustend test suite on every push and pull request, with `rustend-core` unit tests gating parallel `rustend-server` and `rustend-client` jobs.
 
-**Architecture:** One workflow file (`.github/workflows/ci.yml`) with three jobs. `test-core` runs first; `test-server` and `test-client` both declare `needs: [test-core]` and run concurrently once it passes. All jobs use `Swatinem/rust-cache@v2` for Cargo caching. `wasm-pack` and `geckodriver` are installed via inline shell steps in the `test-client` job.
+**Architecture:** One workflow file (`.github/workflows/ci.yml`) with three jobs. `test-core` runs first; `test-server` and `test-client` both declare `needs: [test-core]` and run concurrently once it passes. All jobs use `Swatinem/rust-cache@v2` for Cargo caching. In `test-client`, Firefox is installed via `browser-actions/setup-firefox@v1`, wasm-pack via `taiki-e/install-action@v2`, and geckodriver via an inline shell step with authenticated GitHub API + `jq` + SHA-256 verification.
 
-**Tech Stack:** GitHub Actions, Rust/Cargo, wasm-pack, Firefox (pre-installed on `ubuntu-latest`), geckodriver
+**Tech Stack:** GitHub Actions, Rust/Cargo, wasm-pack, Firefox (`browser-actions/setup-firefox@v1`), geckodriver
 
 **Working directory:** Run all commands from the root of the `worktree-rustend-implementation` worktree (that is, the repository root for this checkout).
 
@@ -66,14 +66,22 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Install Firefox
+        uses: browser-actions/setup-firefox@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
       - name: Install geckodriver
         run: |
-          GECKODRIVER_VERSION=$(curl -s https://api.github.com/repos/mozilla/geckodriver/releases/latest \
-            | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/')
-          curl -sL "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz" \
-            | tar -xz
+          GECKODRIVER_VERSION=$(curl -sf -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/mozilla/geckodriver/releases/latest \
+            | jq -r '.tag_name | ltrimstr("v")')
+          [ -n "$GECKODRIVER_VERSION" ] || { echo "Failed to detect geckodriver version"; exit 1; }
+          TARBALL="geckodriver-v${GECKODRIVER_VERSION}-linux64.tar.gz"
+          curl -sLO "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/${TARBALL}"
+          curl -sLO "https://github.com/mozilla/geckodriver/releases/download/v${GECKODRIVER_VERSION}/${TARBALL}.sha256"
+          sha256sum --strict --check "${TARBALL}.sha256"
+          tar -xzf "${TARBALL}"
           sudo mv geckodriver /usr/local/bin/
       - name: Run WASM browser tests
         run: wasm-pack test --firefox --headless rustend-client
