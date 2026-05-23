@@ -196,3 +196,51 @@ async fn sync_result_has_rejected_field() {
     };
     assert_eq!(result.rejected.len(), 0);
 }
+
+#[wasm_bindgen_test]
+async fn index_query_excludes_wrong_object_type() {
+    let schema = IndexSchema::new()
+        .version(1)
+        .add("by_year_trip", "trip", "$.year");
+    let repo = Repository::open("test-db-type-filter", schema)
+        .await.expect("open");
+
+    repo.save("trip", &Trip { name: "Trip A".into(), year: 2025 }).await.expect("save trip");
+    // Save a different object type with the same field
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Hotel { year: u32 }
+    repo.save("hotel", &Hotel { year: 2025 }).await.expect("save hotel");
+
+    let results = repo
+        .query_by_index::<Trip>("by_year_trip", IndexRange::Eq(serde_json::json!(2025)))
+        .await
+        .expect("query");
+
+    assert_eq!(results.len(), 1, "hotel must not appear in trip index");
+    assert!(matches!(results[0].content, VersionContent::Active(_)));
+}
+
+#[wasm_bindgen_test]
+async fn reopening_with_higher_version_creates_new_index() {
+    let db_name = "test-db-version-upgrade";
+    // v1 schema: no indexes
+    let repo_v1 = Repository::open(db_name, IndexSchema::new().version(1))
+        .await.expect("open v1");
+    repo_v1.save("trip", &Trip { name: "Paris".into(), year: 2024 }).await.expect("save");
+    drop(repo_v1);
+
+    // v2 schema: adds an index
+    let schema_v2 = IndexSchema::new()
+        .version(2)
+        .add("by_year_v2", "trip", "$.year");
+    let repo_v2 = Repository::open(db_name, schema_v2)
+        .await.expect("open v2 with upgrade");
+
+    // Re-save to populate the new index (existing records don't auto-index)
+    repo_v2.save("trip", &Trip { name: "London".into(), year: 2024 }).await.expect("save v2");
+    let results = repo_v2
+        .query_by_index::<Trip>("by_year_v2", IndexRange::Eq(serde_json::json!(2024)))
+        .await
+        .expect("query v2 index");
+    assert!(!results.is_empty(), "v2 index must be queryable after upgrade");
+}

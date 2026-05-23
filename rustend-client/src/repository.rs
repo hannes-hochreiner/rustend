@@ -33,6 +33,7 @@ fn check_parents_are_heads(
 pub struct Repository {
     db:        Database,
     client_id: ClientId,
+    schema:    IndexSchema,
 }
 
 impl Repository {
@@ -47,7 +48,7 @@ impl Repository {
                 id
             }
         };
-        Ok(Self { db, client_id })
+        Ok(Self { db, client_id, schema })
     }
 
     pub fn client_id(&self) -> ClientId {
@@ -153,6 +154,14 @@ impl Repository {
         index_name: &str,
         range: IndexRange,
     ) -> Result<Vec<ObjectVersion<T>>, RustendClientError> {
+        // Look up object_type for this index from schema
+        let object_type = self.schema.entries.iter()
+            .find(|e| e.name == index_name)
+            .map(|e| e.object_type.clone())
+            .ok_or_else(|| RustendClientError::IndexedDb(
+                format!("unknown index: {}", index_name)
+            ))?;
+
         let tx = self.db
             .transaction(&["object_heads"], idb::TransactionMode::ReadOnly)
             .map_err(|e| RustendClientError::IndexedDb(format!("{:?}", e)))?;
@@ -161,10 +170,12 @@ impl Repository {
         let idx = store.index(index_name)
             .map_err(|e| RustendClientError::IndexedDb(format!("{:?}", e)))?;
 
+        let filter_by_type = matches!(&range, IndexRange::All);
+
         let idb_range = match &range {
             IndexRange::All => None,
             IndexRange::Eq(v) => {
-                let key = serde_wasm_bindgen::to_value(v)
+                let key = serde_wasm_bindgen::to_value(&(&object_type, v))
                     .map_err(|e| RustendClientError::IndexedDb(e.to_string()))?;
                 Some(idb::Query::KeyRange(
                     idb::KeyRange::only(&key)
@@ -172,9 +183,9 @@ impl Repository {
                 ))
             }
             IndexRange::Bounds { lower, lower_inclusive, upper, upper_inclusive } => {
-                let lk = serde_wasm_bindgen::to_value(lower)
+                let lk = serde_wasm_bindgen::to_value(&(&object_type, lower))
                     .map_err(|e| RustendClientError::IndexedDb(e.to_string()))?;
-                let uk = serde_wasm_bindgen::to_value(upper)
+                let uk = serde_wasm_bindgen::to_value(&(&object_type, upper))
                     .map_err(|e| RustendClientError::IndexedDb(e.to_string()))?;
                 Some(idb::Query::KeyRange(
                     idb::KeyRange::bound(&lk, &uk, Some(!lower_inclusive), Some(!upper_inclusive))
@@ -190,18 +201,34 @@ impl Repository {
             .map_err(|e| RustendClientError::IndexedDb(format!("{:?}", e)))?;
         tx.await?;
 
-        results.into_iter().map(|v| {
-            let head: idb_heads::HeadRecord = serde_wasm_bindgen::from_value(v)
-                .map_err(|e| RustendClientError::IndexedDb(e.to_string()))?;
-            let content = match head.content {
-                Content::Active(data) => {
-                    let typed: T = serde_json::from_value(data)?;
-                    VersionContent::Active(typed)
+        results.into_iter()
+            .filter_map(|v| {
+                let head: idb_heads::HeadRecord = match serde_wasm_bindgen::from_value(v) {
+                    Ok(h) => h,
+                    Err(e) => return Some(Err(RustendClientError::IndexedDb(e.to_string()))),
+                };
+                // For IndexRange::All, filter by object_type here since the index scan
+                // returns all entries regardless of object_type
+                if filter_by_type && head.object_type != object_type {
+                    return None;
                 }
-                Content::Deleted => VersionContent::Deleted,
-            };
-            Ok(ObjectVersion { object_id: head.object_id, revision_id: head.revision_id, content })
-        }).collect()
+                let content = match head.content {
+                    Content::Active(data) => {
+                        let typed: T = match serde_json::from_value(data) {
+                            Ok(v) => v,
+                            Err(e) => return Some(Err(RustendClientError::Serialisation(e))),
+                        };
+                        VersionContent::Active(typed)
+                    }
+                    Content::Deleted => VersionContent::Deleted,
+                };
+                Some(Ok(ObjectVersion {
+                    object_id:   head.object_id,
+                    revision_id: head.revision_id,
+                    content,
+                }))
+            })
+            .collect()
     }
 
     pub async fn resolve_conflict<T: Serialize>(

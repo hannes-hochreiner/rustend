@@ -5,13 +5,25 @@ pub struct IndexEntry {
     pub json_path:   String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct IndexSchema {
+    pub version: u32,
     pub entries: Vec<IndexEntry>,
+}
+
+impl Default for IndexSchema {
+    fn default() -> Self {
+        Self { version: 1, entries: vec![] }
+    }
 }
 
 impl IndexSchema {
     pub fn new() -> Self { Self::default() }
+
+    pub fn version(mut self, v: u32) -> Self {
+        self.version = v;
+        self
+    }
 
     pub fn add(
         mut self,
