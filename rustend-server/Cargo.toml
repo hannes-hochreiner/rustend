@@ -1,0 +1,22 @@
+[package]
+name = "rustend-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustend-core = { workspace = true }
+axum = { version = "0.8", features = ["json"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+tokio = { version = "1", features = ["full"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+form_urlencoded = "1"
+
+[dev-dependencies]
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }

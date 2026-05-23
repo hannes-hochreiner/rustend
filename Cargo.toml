@@ -1,0 +1,11 @@
+[workspace]
+members = ["rustend-core", "rustend-server", "rustend-client"]
+resolver = "2"
+
+[workspace.dependencies]
+rustend-core = { path = "rustend-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
