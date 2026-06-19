@@ -30,6 +30,7 @@ pub enum RejectionReason {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
+    #[serde(default)]
     pub client_id:    ClientId,
     pub since:        Option<TransactionId>,
     pub object_types: Option<Vec<String>>,

@@ -604,6 +604,59 @@ async fn push_via_http_uses_auth_client_id() {
 }
 
 #[tokio::test]
+async fn pull_via_http_excludes_own_revisions() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec![] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
+
+    // Push one revision directly as this client
+    // (We need a pool; reconstruct from the app isn't possible — use db::push directly via setup)
+    // Instead, push via HTTP so the handler registers the client
+    let rev = Revision {
+        id: RevisionId::new(), object_id: ObjectId::new(),
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client_id,
+        content: Content::Active(serde_json::json!({})),
+    };
+    let push_body = serde_json::json!({ "revisions": [rev] });
+    let push_resp = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/changes")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::from(serde_json::to_vec(&push_body).unwrap()))
+            .unwrap()
+    ).await.unwrap();
+    assert_eq!(push_resp.status(), StatusCode::OK);
+
+    // Pull without client_id in body — server infers it from auth
+    let body = serde_json::json!({ "since": null });
+    let resp = app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/changes/query")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let pull_resp: rustend_core::PullResponse = serde_json::from_slice(&bytes).unwrap();
+    // Own revision must be excluded from pull
+    assert_eq!(pull_resp.object_updates.len(), 0);
+}
+
+#[tokio::test]
 async fn filter_does_not_hide_conflict_when_one_head_matches() {
     let (store, _container) = setup().await;
     let client_a = rustend_core::ClientId::new();
