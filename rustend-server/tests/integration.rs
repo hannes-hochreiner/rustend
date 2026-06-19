@@ -32,7 +32,19 @@ async fn setup() -> (ServerStore, impl std::any::Any) {
     let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
     let pool = PgPool::connect(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    (ServerStore::new(pool, test_auth(vec![])).trust_forwarded_for(), container)
+    (ServerStore::new(pool, test_auth(vec![])), container)
+}
+
+async fn setup_http(auth: TestAuthProvider) -> (axum::Router, impl std::any::Any) {
+    let container = Postgres::default().start().await.unwrap();
+    let host = container.get_host().await.unwrap();
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
+    let pool = PgPool::connect(&url).await.unwrap();
+    run_migrations(&pool).await.unwrap();
+    let store = ServerStore::new(pool, auth).trust_forwarded_for();
+    let app = rustend_server::router(store);
+    (app, container)
 }
 
 #[tokio::test]
@@ -201,15 +213,7 @@ async fn pull_rejects_out_of_range_transaction_id() {
         client_ip,
         AuthInfo { client_id, user_id, roles: vec![] },
     )]);
-    let container = Postgres::default().start().await.unwrap();
-    let host = container.get_host().await.unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
-    let pool = PgPool::connect(&url).await.unwrap();
-    run_migrations(&pool).await.unwrap();
-    let store = ServerStore::new(pool, auth).trust_forwarded_for();
-
-    let app = rustend_server::router(store);
+    let (app, _container) = setup_http(auth).await;
 
     let body = serde_json::json!({
         "client_id": client_id,
@@ -364,14 +368,7 @@ async fn get_object_returns_404_for_unknown_id() {
         client_ip,
         AuthInfo { client_id, user_id, roles: vec![] },
     )]);
-    let container = Postgres::default().start().await.unwrap();
-    let host = container.get_host().await.unwrap();
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
-    let pool = PgPool::connect(&url).await.unwrap();
-    run_migrations(&pool).await.unwrap();
-    let store = ServerStore::new(pool, auth).trust_forwarded_for();
-    let app = rustend_server::router(store);
+    let (app, _container) = setup_http(auth).await;
     let unknown_object = uuid::Uuid::new_v4();
 
     let resp = app.oneshot(
@@ -381,6 +378,35 @@ async fn get_object_returns_404_for_unknown_id() {
             .body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn whoami_returns_authenticated_identity() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec!["admin".to_string()] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
+
+    let resp = app.oneshot(
+        Request::builder()
+            .uri("/whoami")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["client_id"], serde_json::json!(client_id.0));
+    assert_eq!(json["user_id"], serde_json::json!(user_id.0));
+    assert_eq!(json["roles"], serde_json::json!(["admin"]));
 }
 
 #[tokio::test]
