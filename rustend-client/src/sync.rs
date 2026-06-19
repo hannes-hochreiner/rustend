@@ -1,7 +1,5 @@
 use idb::Database;
-use rustend_core::{
-    ClientId, HeadAction, PullRequest, PushRequest, Revision,
-};
+use rustend_core::{HeadAction, PullRequest, PushRequest, Revision};
 use crate::{
     error::RustendClientError,
     idb::{object_heads as idb_heads, revisions as idb_revisions, sync_state},
@@ -10,18 +8,16 @@ use crate::{
 
 pub async fn sync(
     db: &Database,
-    client_id: ClientId,
     server_url: &str,
     pull_params: PullRequest,
 ) -> Result<SyncResult, RustendClientError> {
-    let (pushed, rejected) = push_pending(db, client_id, server_url).await?;
+    let (pushed, rejected) = push_pending(db, server_url).await?;
     let (pulled, conflicted) = pull_updates(db, server_url, pull_params).await?;
     Ok(SyncResult { pushed, pulled, conflicted, rejected })
 }
 
 async fn push_pending(
     db: &Database,
-    client_id: ClientId,
     server_url: &str,
 ) -> Result<(u32, Vec<rustend_core::RejectedRevision>), RustendClientError> {
     let pending = idb_revisions::get_pending_revisions(db).await?;
@@ -30,7 +26,7 @@ async fn push_pending(
     }
 
     let revisions: Vec<Revision> = pending.iter().map(|r| r.revision()).collect();
-    let req = PushRequest { client_id, revisions };
+    let req = PushRequest { revisions };
 
     let url = format!("{}/changes", server_url.trim_end_matches('/'));
     let resp = gloo_net::http::Request::post(&url)
@@ -99,20 +95,14 @@ async fn pull_updates(
         match update.action {
             HeadAction::Replace => {
                 let existing = idb_heads::get_heads(db, update.object_id).await?;
-
-                // The incoming revision IDs and the IDs they supersede (their parents)
                 let incoming_ids: std::collections::HashSet<rustend_core::RevisionId> =
                     update.heads.iter().map(|r| r.id).collect();
                 let superseded_ids: std::collections::HashSet<rustend_core::RevisionId> =
                     update.heads.iter().flat_map(|r| r.lineage.parents()).collect();
-
-                // A real local conflict exists only when we have an existing head that is
-                // neither the incoming revision itself nor a parent of any incoming revision.
                 let has_diverged = existing.iter().any(|h| {
                     !incoming_ids.contains(&h.revision_id)
                         && !superseded_ids.contains(&h.revision_id)
                 });
-
                 if has_diverged {
                     idb_heads::add_heads(db, &update.heads).await?;
                     conflicted += 1;
@@ -127,9 +117,9 @@ async fn pull_updates(
         }
     }
 
-    let (client_id, _) = sync_state::read_sync_state(db).await?;
-    if let Some(cid) = client_id {
-        sync_state::write_sync_state(db, cid, Some(pull_resp.up_to_transaction)).await?;
+    let (client_id, user_id, _) = sync_state::read_sync_state(db).await?;
+    if let (Some(cid), Some(uid)) = (client_id, user_id) {
+        sync_state::write_sync_state(db, cid, uid, Some(pull_resp.up_to_transaction)).await?;
     }
 
     Ok((pulled, conflicted))

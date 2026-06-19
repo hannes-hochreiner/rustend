@@ -1,6 +1,7 @@
 use idb::Database;
 use rustend_core::{
-    ClientId, Content, Lineage, ObjectId, PullRequest, Revision, RevisionId,
+    ClientId, UserId, Content, Lineage, ObjectId, PullRequest, Revision, RevisionId,
+    WhoAmIResponse,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use crate::{
@@ -33,26 +34,77 @@ fn check_parents_are_heads(
 pub struct Repository {
     db:        Database,
     client_id: ClientId,
+    user_id:   UserId,
     schema:    IndexSchema,
 }
 
 impl Repository {
-    pub async fn open(db_name: &str, schema: IndexSchema) -> Result<Self, RustendClientError> {
+    pub async fn open(
+        db_name: &str,
+        schema: IndexSchema,
+        server_url: &str,
+    ) -> Result<Self, RustendClientError> {
         let db = open::open_database(db_name, &schema).await?;
-        let (client_id, _) = sync_state::read_sync_state(&db).await?;
-        let client_id = match client_id {
-            Some(id) => id,
-            None => {
-                let id = ClientId::new();
-                sync_state::write_sync_state(&db, id, None).await?;
-                id
+        let (stored_client, stored_user, existing_txn) =
+            sync_state::read_sync_state(&db).await?;
+
+        let (client_id, user_id) = match Self::fetch_whoami(server_url).await {
+            Ok(whoami) => {
+                if stored_client != Some(whoami.client_id) || stored_user != Some(whoami.user_id) {
+                    sync_state::write_sync_state(
+                        &db, whoami.client_id, whoami.user_id, existing_txn,
+                    ).await?;
+                }
+                (whoami.client_id, whoami.user_id)
+            }
+            Err(_) => {
+                // Network unavailable — use cached identity if present
+                match (stored_client, stored_user) {
+                    (Some(cid), Some(uid)) => (cid, uid),
+                    _ => return Err(RustendClientError::Network(
+                        "whoami failed and no cached identity found".into(),
+                    )),
+                }
             }
         };
-        Ok(Self { db, client_id, schema })
+
+        Ok(Self { db, client_id, user_id, schema })
     }
 
     pub fn client_id(&self) -> ClientId {
         self.client_id
+    }
+
+    pub fn user_id(&self) -> UserId {
+        self.user_id
+    }
+
+    async fn fetch_whoami(server_url: &str) -> Result<WhoAmIResponse, RustendClientError> {
+        let url = format!("{}/whoami", server_url.trim_end_matches('/'));
+        let resp = gloo_net::http::Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| RustendClientError::Network(e.to_string()))?;
+        if !resp.ok() {
+            return Err(RustendClientError::Network(
+                format!("whoami failed: {}", resp.status()),
+            ));
+        }
+        resp.json::<WhoAmIResponse>()
+            .await
+            .map_err(|e| RustendClientError::Network(e.to_string()))
+    }
+
+    #[cfg(test)]
+    pub async fn open_offline(
+        db_name: &str,
+        schema: IndexSchema,
+        client_id: ClientId,
+        user_id: UserId,
+    ) -> Result<Self, RustendClientError> {
+        let db = open::open_database(db_name, &schema).await?;
+        sync_state::write_sync_state(&db, client_id, user_id, None).await?;
+        Ok(Self { db, client_id, user_id, schema })
     }
 
     pub async fn save<T: Serialize>(
@@ -299,39 +351,15 @@ impl Repository {
         idb_files::delete_file(&self.db, object_id).await
     }
 
-    pub async fn register(
-        &mut self,
-        server_url: &str,
-    ) -> Result<(), RustendClientError> {
-        let url = format!("{}/clients", server_url.trim_end_matches('/'));
-        let resp = gloo_net::http::Request::post(&url)
-            .send()
-            .await
-            .map_err(|e| RustendClientError::Network(e.to_string()))?;
-        if !resp.ok() {
-            return Err(RustendClientError::Network(
-                format!("register failed: {}", resp.status()),
-            ));
-        }
-        let server_id: rustend_core::ClientId = resp
-            .json()
-            .await
-            .map_err(|e| RustendClientError::Network(e.to_string()))?;
-        let (_, existing_txn) = sync_state::read_sync_state(&self.db).await?;
-        self.client_id = server_id;
-        sync_state::write_sync_state(&self.db, server_id, existing_txn).await?;
-        Ok(())
-    }
-
     pub async fn sync(
         &self,
         server_url: &str,
         mut pull_params: PullRequest,
     ) -> Result<SyncResult, RustendClientError> {
         if pull_params.since.is_none() {
-            let (_, last_txn) = sync_state::read_sync_state(&self.db).await?;
+            let (_, _, last_txn) = sync_state::read_sync_state(&self.db).await?;
             pull_params.since = last_txn;
         }
-        crate::sync::sync(&self.db, self.client_id, server_url, pull_params).await
+        crate::sync::sync(&self.db, server_url, pull_params).await
     }
 }

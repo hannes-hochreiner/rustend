@@ -1666,7 +1666,6 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
- "form_urlencoded",
  "rustend-core",
  "serde",
  "serde_json",
