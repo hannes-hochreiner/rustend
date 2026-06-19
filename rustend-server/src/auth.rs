@@ -7,7 +7,7 @@ use std::{
 };
 use async_trait::async_trait;
 use axum::{
-    extract::{connect_info::MockConnectInfo, ConnectInfo},
+    extract::ConnectInfo,
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -125,15 +125,20 @@ where
 
 fn extract_ip<B>(req: &Request<B>, ip_source: IpSource) -> Option<IpAddr> {
     match ip_source {
-        IpSource::ConnectInfo => req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0.ip())
-            .or_else(|| {
+        IpSource::ConnectInfo => {
+            let ip = req
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ci| ci.0.ip());
+            #[cfg(test)]
+            let ip = ip.or_else(|| {
+                use axum::extract::connect_info::MockConnectInfo;
                 req.extensions()
                     .get::<MockConnectInfo<SocketAddr>>()
                     .map(|m| m.0.ip())
-            }),
+            });
+            ip
+        }
         IpSource::ForwardedFor => req
             .headers()
             .get("x-forwarded-for")
