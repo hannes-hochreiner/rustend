@@ -596,6 +596,11 @@ async fn push_via_http_uses_auth_client_id() {
             .unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["accepted"].as_array().unwrap().len(), 1);
+    assert!(json["rejected"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]
