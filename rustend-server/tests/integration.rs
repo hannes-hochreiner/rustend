@@ -2,7 +2,7 @@ use std::{collections::HashMap, net::IpAddr};
 use async_trait::async_trait;
 use rustend_core::{
     ClientId, UserId, Content, HeadAction, Lineage, ObjectId,
-    PushRequest, Revision, RevisionId,
+    Revision, RevisionId,
 };
 use rustend_server::{
     auth::{AuthError, AuthInfo, AuthProvider},
@@ -73,7 +73,8 @@ async fn push_creates_revision_and_pull_returns_it() {
 
     let push_resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![rev.clone()] },
+        client_a,
+        vec![rev.clone()],
     ).await.unwrap();
     assert_eq!(push_resp.accepted.len(), 1);
     assert!(push_resp.rejected.is_empty());
@@ -114,7 +115,8 @@ async fn conflicting_updates_produce_conflict_action() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![root_rev.clone()] },
+        client_a,
+        vec![root_rev.clone()],
     ).await.unwrap();
 
     let rev_b = Revision {
@@ -134,11 +136,13 @@ async fn conflicting_updates_produce_conflict_action() {
 
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_b, revisions: vec![rev_b] },
+        client_b,
+        vec![rev_b],
     ).await.unwrap();
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_c, revisions: vec![rev_c] },
+        client_c,
+        vec![rev_c],
     ).await.unwrap();
 
     let up_to = rustend_core::TransactionId(
@@ -249,10 +253,11 @@ async fn push_rejects_spoofed_created_by() {
         created_by: client_b,    // claims to be client_b
         content: Content::Active(serde_json::json!({})),
     };
-    // pushed by client_a
+    // pushed by client_a (but rev.created_by = client_b)
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![rev] },
+        client_a,
+        vec![rev],
     ).await.unwrap();
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
@@ -281,7 +286,8 @@ async fn push_accepts_intra_batch_parent() {
     };
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root, update] },
+        client,
+        vec![root, update],
     ).await.unwrap();
     assert_eq!(resp.accepted.len(), 2);
     assert!(resp.rejected.is_empty());
@@ -303,7 +309,8 @@ async fn push_rejects_cross_object_parent() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root_a.clone()] },
+        client,
+        vec![root_a.clone()],
     ).await.unwrap();
     // Revision for object_b with parent from object_a
     let object_b = ObjectId::new();
@@ -316,7 +323,8 @@ async fn push_rejects_cross_object_parent() {
     };
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![bad_rev] },
+        client,
+        vec![bad_rev],
     ).await.unwrap();
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
@@ -338,7 +346,8 @@ async fn push_rejects_duplicate_merge_parents() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root.clone()] },
+        client,
+        vec![root.clone()],
     ).await.unwrap();
     // Merge with same parent twice
     let merge = Revision {
@@ -350,7 +359,8 @@ async fn push_rejects_duplicate_merge_parents() {
     };
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![merge] },
+        client,
+        vec![merge],
     ).await.unwrap();
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
@@ -430,7 +440,8 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
         };
         rustend_server::db::push::push_revisions(
             &store.pool,
-            PushRequest { client_id: client_a, revisions: vec![rev] },
+            client_a,
+            vec![rev],
         ).await.unwrap();
     }
 
@@ -448,7 +459,8 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![late_rev] },
+        client_a,
+        vec![late_rev],
     ).await.unwrap();
 
     // Fetch as client_b using the pre-captured up_to
@@ -489,7 +501,8 @@ async fn merge_parent_order_is_preserved() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root_a.clone(), root_b.clone(), root_c.clone()] },
+        client,
+        vec![root_a.clone(), root_b.clone(), root_c.clone()],
     ).await.unwrap();
 
     let merge = Revision {
@@ -501,7 +514,8 @@ async fn merge_parent_order_is_preserved() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![merge.clone()] },
+        client,
+        vec![merge.clone()],
     ).await.unwrap();
 
     let parents = rustend_server::db::revisions::get_parents(&store.pool, merge.id.0)
@@ -534,7 +548,8 @@ async fn get_parents_batch_matches_individual_queries() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root.clone(), update.clone()] },
+        client,
+        vec![root.clone(), update.clone()],
     ).await.unwrap();
 
     let batch = rustend_server::db::revisions::get_parents_batch(
@@ -545,6 +560,42 @@ async fn get_parents_batch_matches_individual_queries() {
     let update_parents = batch.get(&update.id.0).cloned().unwrap_or_default();
     assert!(root_parents.is_empty());
     assert_eq!(update_parents, vec![root.id.0]);
+}
+
+#[tokio::test]
+async fn push_via_http_uses_auth_client_id() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec![] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
+
+    let object_id = ObjectId::new();
+    let rev = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client_id,
+        content: Content::Active(serde_json::json!({"name": "Rome"})),
+    };
+    // Note: body has NO client_id field (new protocol)
+    let body = serde_json::json!({ "revisions": [rev] });
+
+    let resp = app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/changes")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -569,7 +620,7 @@ async fn filter_does_not_hide_conflict_when_one_head_matches() {
         content: Content::Active(serde_json::json!({})),
     };
     rustend_server::db::push::push_revisions(
-        &store.pool, PushRequest { client_id: client_a, revisions: vec![root.clone()] },
+        &store.pool, client_a, vec![root.clone()],
     ).await.unwrap();
 
     // rev_b created AFTER t0 — passes the Gt(t0) filter
@@ -587,10 +638,10 @@ async fn filter_does_not_hide_conflict_when_one_head_matches() {
         content: Content::Active(serde_json::json!({})),
     };
     rustend_server::db::push::push_revisions(
-        &store.pool, PushRequest { client_id: client_b, revisions: vec![rev_b] },
+        &store.pool, client_b, vec![rev_b],
     ).await.unwrap();
     rustend_server::db::push::push_revisions(
-        &store.pool, PushRequest { client_id: client_c, revisions: vec![rev_c] },
+        &store.pool, client_c, vec![rev_c],
     ).await.unwrap();
 
     // Filter: only revisions created after t0

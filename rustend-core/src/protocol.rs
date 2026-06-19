@@ -3,6 +3,7 @@ use crate::{ClientId, CreatedAtFilter, FilterCondition, ObjectId, Revision, Revi
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushRequest {
+    #[serde(default)]
     pub client_id: ClientId,
     pub revisions: Vec<Revision>,
 }
