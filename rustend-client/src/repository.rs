@@ -95,7 +95,6 @@ impl Repository {
             .map_err(|e| RustendClientError::Network(e.to_string()))
     }
 
-    #[cfg(test)]
     pub async fn open_offline(
         db_name: &str,
         schema: IndexSchema,

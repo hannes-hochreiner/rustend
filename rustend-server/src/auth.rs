@@ -107,7 +107,10 @@ where
             let auth_info = match provider.authenticate(ip).await {
                 Ok(info)                    => info,
                 Err(AuthError::Unauthenticated) => return Ok(unauthenticated()),
-                Err(AuthError::Internal(_)) => return Ok(provider_error()),
+                Err(AuthError::Internal(msg)) => {
+                    tracing::error!("auth provider error: {msg}");
+                    return Ok(provider_error());
+                }
             };
 
             if let Err(e) = crate::db::clients::upsert_client(

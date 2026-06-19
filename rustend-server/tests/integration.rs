@@ -380,7 +380,7 @@ async fn get_object_returns_404_for_unknown_id() {
 
     let resp = app.oneshot(
         Request::builder()
-            .uri(format!("/objects/{}?client_id={}", unknown_object, client_id.0))
+            .uri(format!("/objects/{}", unknown_object))
             .header("x-forwarded-for", "127.0.0.1")
             .body(Body::empty()).unwrap()
     ).await.unwrap();
