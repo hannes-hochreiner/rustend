@@ -8,8 +8,6 @@ pub enum ServerError {
     Unauthenticated,
     #[error("auth provider error: {0}")]
     AuthProvider(String),
-    #[error("unknown client")]
-    UnknownClient,
     #[error("revision already exists")]
     DuplicateRevision,
     #[error("unknown parent revision: {0}")]
@@ -29,8 +27,6 @@ impl IntoResponse for ServerError {
                 (StatusCode::UNAUTHORIZED, "unauthenticated".to_string()),
             ServerError::AuthProvider(_) =>
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
-            ServerError::UnknownClient =>
-                (StatusCode::UNAUTHORIZED, self.to_string()),
             ServerError::DuplicateRevision =>
                 (StatusCode::CONFLICT, self.to_string()),
             ServerError::UnknownParent(_) =>

@@ -18,7 +18,6 @@ pub fn router(store: ServerStore) -> Router {
 
     Router::new()
         .route("/whoami",        get(handlers::whoami::whoami))
-        .route("/clients",       post(handlers::clients::register_client))
         .route("/changes",       post(handlers::push::push_changes))
         .route("/changes/query", post(handlers::pull::pull_changes))
         .route("/objects/{id}",  get(handlers::objects::get_object))
