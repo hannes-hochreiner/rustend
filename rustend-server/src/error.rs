@@ -4,6 +4,10 @@ use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
 pub enum ServerError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("unauthenticated")]
+    Unauthenticated,
+    #[error("auth provider error: {0}")]
+    AuthProvider(String),
     #[error("unknown client")]
     UnknownClient,
     #[error("revision already exists")]
@@ -20,6 +24,10 @@ impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             ServerError::Database(_) =>
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
+            ServerError::Unauthenticated =>
+                (StatusCode::UNAUTHORIZED, "unauthenticated".to_string()),
+            ServerError::AuthProvider(_) =>
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string()),
             ServerError::UnknownClient =>
                 (StatusCode::UNAUTHORIZED, self.to_string()),
