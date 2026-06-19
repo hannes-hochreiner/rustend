@@ -98,8 +98,8 @@ async fn repository_exposes_client_id_after_open() {
     let repo = Repository::open_offline("test-db-client-id", IndexSchema::new(), client_id, user_id)
         .await
         .expect("open failed");
-    // Reopen with same identity should return same client_id
-    let repo2 = Repository::open("test-db-client-id", IndexSchema::new(), "http://localhost:8080")
+    // Reopen with same identity loads it from IndexedDB
+    let repo2 = Repository::open_offline("test-db-client-id", IndexSchema::new(), client_id, user_id)
         .await
         .expect("reopen failed");
     assert_eq!(repo.client_id(), repo2.client_id());

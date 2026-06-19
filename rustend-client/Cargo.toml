@@ -24,4 +24,3 @@ thiserror = { workspace = true }
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 rustend-core = { workspace = true }
-uuid = { workspace = true, features = ["js"] }
