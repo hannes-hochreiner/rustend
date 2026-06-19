@@ -13,4 +13,5 @@ pub use filter::{CreatedAtFilter, FilterCondition, FilterOperator};
 pub use protocol::{
     HeadAction, ObjectUpdate, PullRequest, PullResponse,
     PushRequest, PushResponse, RejectedRevision, RejectionReason,
+    WhoAmIResponse,
 };
