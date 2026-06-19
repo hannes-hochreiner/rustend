@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::{IpAddr, SocketAddr}};
+use std::{collections::HashMap, net::IpAddr};
 use async_trait::async_trait;
 use rustend_core::{
     ClientId, UserId, Content, HeadAction, Lineage, ObjectId,
@@ -32,7 +32,7 @@ async fn setup() -> (ServerStore, impl std::any::Any) {
     let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
     let pool = PgPool::connect(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    (ServerStore::new(pool, test_auth(vec![])), container)
+    (ServerStore::new(pool, test_auth(vec![])).trust_forwarded_for(), container)
 }
 
 #[tokio::test]
@@ -192,7 +192,6 @@ async fn object_endpoint_rejects_unauthenticated_ip() {
 #[tokio::test]
 async fn pull_rejects_out_of_range_transaction_id() {
     use axum::{body::Body, http::{Request, StatusCode}};
-    use axum::extract::connect_info::MockConnectInfo;
     use tower::ServiceExt;
 
     let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
@@ -208,10 +207,9 @@ async fn pull_rejects_out_of_range_transaction_id() {
     let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
     let pool = PgPool::connect(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    let store = ServerStore::new(pool, auth);
+    let store = ServerStore::new(pool, auth).trust_forwarded_for();
 
-    let app = rustend_server::router(store)
-        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1234))));
+    let app = rustend_server::router(store);
 
     let body = serde_json::json!({
         "client_id": client_id,
@@ -223,6 +221,7 @@ async fn pull_rejects_out_of_range_transaction_id() {
             .method("POST")
             .uri("/changes/query")
             .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
             .body(Body::from(serde_json::to_vec(&body).unwrap()))
             .unwrap()
     ).await.unwrap();
@@ -356,7 +355,6 @@ async fn push_rejects_duplicate_merge_parents() {
 #[tokio::test]
 async fn get_object_returns_404_for_unknown_id() {
     use axum::{body::Body, http::{Request, StatusCode}};
-    use axum::extract::connect_info::MockConnectInfo;
     use tower::ServiceExt;
 
     let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
@@ -372,14 +370,14 @@ async fn get_object_returns_404_for_unknown_id() {
     let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
     let pool = PgPool::connect(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    let store = ServerStore::new(pool, auth);
-    let app = rustend_server::router(store)
-        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1234))));
+    let store = ServerStore::new(pool, auth).trust_forwarded_for();
+    let app = rustend_server::router(store);
     let unknown_object = uuid::Uuid::new_v4();
 
     let resp = app.oneshot(
         Request::builder()
             .uri(format!("/objects/{}?client_id={}", unknown_object, client_id.0))
+            .header("x-forwarded-for", "127.0.0.1")
             .body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
