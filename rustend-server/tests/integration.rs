@@ -219,10 +219,7 @@ async fn pull_rejects_out_of_range_transaction_id() {
     )]);
     let (app, _container) = setup_http(auth).await;
 
-    let body = serde_json::json!({
-        "client_id": client_id,
-        "since": u64::MAX,
-    });
+    let body = serde_json::json!({ "since": u64::MAX });
 
     let resp = app.oneshot(
         Request::builder()

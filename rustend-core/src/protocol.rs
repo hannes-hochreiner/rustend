@@ -3,8 +3,6 @@ use crate::{ClientId, CreatedAtFilter, FilterCondition, ObjectId, Revision, Revi
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushRequest {
-    #[serde(default)]
-    pub client_id: ClientId,
     pub revisions: Vec<Revision>,
 }
 
@@ -30,8 +28,6 @@ pub enum RejectionReason {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
-    #[serde(default)]
-    pub client_id:    ClientId,
     pub since:        Option<TransactionId>,
     pub object_types: Option<Vec<String>>,
     pub created_at:   Option<Vec<CreatedAtFilter>>,
@@ -84,12 +80,26 @@ mod tests {
     #[test]
     fn push_request_roundtrip() {
         let req = PushRequest {
-            client_id: ClientId::new(),
             revisions: vec![make_revision()],
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: PushRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(req.revisions.len(), back.revisions.len());
+    }
+
+    #[test]
+    fn push_request_has_no_client_id_field() {
+        // A JSON body without client_id must deserialize successfully
+        let json = r#"{"revisions":[]}"#;
+        let req: PushRequest = serde_json::from_str(json).unwrap();
+        assert!(req.revisions.is_empty());
+    }
+
+    #[test]
+    fn pull_request_has_no_client_id_field() {
+        let json = r#"{"since":null}"#;
+        let req: PullRequest = serde_json::from_str(json).unwrap();
+        assert!(req.since.is_none());
     }
 
     #[test]
