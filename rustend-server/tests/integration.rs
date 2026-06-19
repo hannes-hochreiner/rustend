@@ -650,7 +650,7 @@ async fn pull_via_http_excludes_own_revisions() {
             .unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let pull_resp: rustend_core::PullResponse = serde_json::from_slice(&bytes).unwrap();
     // Own revision must be excluded from pull
     assert_eq!(pull_resp.object_updates.len(), 0);
