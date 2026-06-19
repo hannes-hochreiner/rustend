@@ -7,9 +7,17 @@ pub mod handlers;
 pub use store::ServerStore;
 
 use axum::{routing::{get, post}, Router};
+use crate::auth::AuthLayer;
 
 pub fn router(store: ServerStore) -> Router {
+    let auth_layer = AuthLayer::new(
+        store.auth.clone(),
+        store.pool.clone(),
+        store.ip_source,
+    );
+
     Router::new()
+        .route("/whoami",        get(handlers::whoami::whoami))
         .route("/clients",       post(handlers::clients::register_client))
         .route("/changes",       post(handlers::push::push_changes))
         .route("/changes/query", post(handlers::pull::pull_changes))
@@ -20,6 +28,7 @@ pub fn router(store: ServerStore) -> Router {
                 .post(handlers::files::upload_file)
                 .delete(handlers::files::delete_file),
         )
+        .layer(auth_layer)
         .with_state(store)
 }
 
