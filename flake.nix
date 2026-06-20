@@ -12,11 +12,12 @@
   outputs = { self, nixpkgs, fenix, ... }:
   let
     system = "x86_64-linux";
+    name = "rustend";
     pkgs = import nixpkgs {
       inherit system;
       config.allowUnfree = true;
     };
-    toolchain = with fenix.packages.${system}; combine [
+    rustToolchain = with fenix.packages.${system}; combine [
       latest.cargo
       latest.rustc
       latest.rust-analyzer
@@ -25,60 +26,47 @@
       # latest.completeToolchain
       targets.wasm32-unknown-unknown.latest.rust-std
     ];
+    devDeps = with pkgs; [
+      rustToolchain
+      wasm-pack
+      nushell
+      trunk
+      openssl
+      pkg-config
+      bash # default shell for vscode terminal, required as the builder for the dev shell, and for scripts Claude may generate.
+      firefox
+      geckodriver
+      gh
+      (vscode-with-extensions.override {
+        vscodeExtensions = with pkgs.vscode-extensions; [
+          rust-lang.rust-analyzer
+          anthropic.claude-code
+          streetsidesoftware.code-spell-checker
+          fill-labs.dependi
+          tamasfe.even-better-toml
+          bbenoist.nix
+          thenuprojectcontributors.vscode-nushell-lang
+        ];
+      })
+    ];
   in {
     # packages.${system}.hello = nixpkgs.legacyPackages.x86_64-linux.hello;
 
     # packages.${system}.default = self.packages.x86_64-linux.hello;
 
-    devShells.${system}.default = pkgs.mkShell {
-      name = "rustend";
-      
-      # Inherit inputs from checks.
-      # checks = self.checks.${system};
+    devShells.${system}.default = builtins.derivation {
+      inherit name;
+      inherit system;
+      builder = "${pkgs.bash}/bin/bash";
+      __structuredAttrs = true;
+
       shellHook = ''
-        # code .
-        exec nu
+        export PATH="${pkgs.lib.makeBinPath devDeps}:$PATH"
+        export OPENSSL_DEV=${pkgs.openssl.dev}
+        export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig"
+        export name="${name}"
+        exec nu -e "source start.nu"
       '';
-      # Additional dev-shell environment variables can be set directly
-      # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
-      # Extra inputs can be added here; cargo and rustc are provided by default.
-      buildInputs = with pkgs; [
-        toolchain
-        bun
-        wasm-pack
-        nushell
-        libxml2
-        trunk
-        openssl
-        pkg-config
-        bash # default shell for vscode terminal
-        mdbook
-        firefox
-        geckodriver
-        gh
-        (vscode-with-extensions.override {
-          vscodeExtensions = with vscode-extensions; [
-            rust-lang.rust-analyzer
-            anthropic.claude-code
-            streetsidesoftware.code-spell-checker
-            fill-labs.dependi
-            tamasfe.even-better-toml
-            bbenoist.nix
-            thenuprojectcontributors.vscode-nushell-lang
-          # ] ++ pkgs.vscode-utils.extensionsFromVscodeMarketplace [
-          #   {
-          #     name = "remote-ssh-edit";
-          #     publisher = "ms-vscode-remote";
-          #     version = "0.47.2";
-          #     sha256 = "1hp6gjh4xp2m1xlm1jsdzxw9d8frkiidhph6nvl24d0h8z34w49g";
-          #   }
-          ];
-        })
-      ];
-
-      OPENSSL_DEV = pkgs.openssl.dev;
-      PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
     };
-
   };
 }
