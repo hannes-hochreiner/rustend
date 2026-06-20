@@ -1,11 +1,29 @@
+use std::{collections::HashMap, net::IpAddr};
+use async_trait::async_trait;
 use rustend_core::{
-    ClientId, Content, HeadAction, Lineage, ObjectId,
-    PushRequest, Revision, RevisionId,
+    ClientId, UserId, Content, HeadAction, Lineage, ObjectId,
+    Revision, RevisionId,
 };
-use rustend_server::{run_migrations, ServerStore};
+use rustend_server::{
+    auth::{AuthError, AuthInfo, AuthProvider},
+    run_migrations, ServerStore,
+};
 use sqlx::PgPool;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
+
+struct TestAuthProvider(HashMap<IpAddr, AuthInfo>);
+
+#[async_trait]
+impl AuthProvider for TestAuthProvider {
+    async fn authenticate(&self, ip: IpAddr) -> Result<AuthInfo, AuthError> {
+        self.0.get(&ip).cloned().ok_or(AuthError::Unauthenticated)
+    }
+}
+
+fn test_auth(entries: Vec<(IpAddr, AuthInfo)>) -> TestAuthProvider {
+    TestAuthProvider(entries.into_iter().collect())
+}
 
 async fn setup() -> (ServerStore, impl std::any::Any) {
     let container = Postgres::default().start().await.unwrap();
@@ -14,7 +32,19 @@ async fn setup() -> (ServerStore, impl std::any::Any) {
     let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
     let pool = PgPool::connect(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    (ServerStore::new(pool), container)
+    (ServerStore::new(pool, test_auth(vec![])), container)
+}
+
+async fn setup_http(auth: TestAuthProvider) -> (axum::Router, impl std::any::Any) {
+    let container = Postgres::default().start().await.unwrap();
+    let host = container.get_host().await.unwrap();
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    let url = format!("postgres://postgres:postgres@{}:{}/postgres", host, port);
+    let pool = PgPool::connect(&url).await.unwrap();
+    run_migrations(&pool).await.unwrap();
+    let store = ServerStore::new(pool, auth).trust_forwarded_for();
+    let app = rustend_server::router(store);
+    (app, container)
 }
 
 #[tokio::test]
@@ -23,8 +53,12 @@ async fn push_creates_revision_and_pull_returns_it() {
 
     let client_a = ClientId::new();
     let client_b = ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client_a).await.unwrap();
-    rustend_server::db::clients::register_client(&store.pool, client_b).await.unwrap();
+    rustend_server::db::clients::upsert_client(
+        &store.pool, client_a, UserId(uuid::Uuid::new_v4()),
+    ).await.unwrap();
+    rustend_server::db::clients::upsert_client(
+        &store.pool, client_b, UserId(uuid::Uuid::new_v4()),
+    ).await.unwrap();
 
     let object_id = ObjectId::new();
     let rev = Revision {
@@ -39,7 +73,8 @@ async fn push_creates_revision_and_pull_returns_it() {
 
     let push_resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![rev.clone()] },
+        client_a,
+        vec![rev.clone()],
     ).await.unwrap();
     assert_eq!(push_resp.accepted.len(), 1);
     assert!(push_resp.rejected.is_empty());
@@ -66,7 +101,9 @@ async fn conflicting_updates_produce_conflict_action() {
     let client_b = ClientId::new();
     let client_c = ClientId::new();
     for c in [client_a, client_b, client_c] {
-        rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
+        rustend_server::db::clients::upsert_client(
+            &store.pool, c, UserId(uuid::Uuid::new_v4()),
+        ).await.unwrap();
     }
 
     let object_id = ObjectId::new();
@@ -78,7 +115,8 @@ async fn conflicting_updates_produce_conflict_action() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![root_rev.clone()] },
+        client_a,
+        vec![root_rev.clone()],
     ).await.unwrap();
 
     let rev_b = Revision {
@@ -98,11 +136,13 @@ async fn conflicting_updates_produce_conflict_action() {
 
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_b, revisions: vec![rev_b] },
+        client_b,
+        vec![rev_b],
     ).await.unwrap();
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_c, revisions: vec![rev_c] },
+        client_c,
+        vec![rev_c],
     ).await.unwrap();
 
     let up_to = rustend_core::TransactionId(
@@ -131,33 +171,25 @@ async fn database_error_response_is_generic() {
 }
 
 #[tokio::test]
-async fn file_endpoints_require_registered_client() {
+async fn file_endpoints_reject_unauthenticated_ip() {
     use axum::{body::Body, http::{Request, StatusCode}};
     use tower::ServiceExt;
 
     let (store, _container) = setup().await;
+    // No MockConnectInfo → middleware cannot extract IP → 401
     let app = rustend_server::router(store);
     let object_uuid = uuid::Uuid::new_v4();
 
-    // GET without client_id query param → 401
-    let resp = app.clone().oneshot(
+    let resp = app.oneshot(
         Request::builder()
             .uri(format!("/files/{}", object_uuid))
-            .body(Body::empty()).unwrap()
-    ).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-
-    // GET with unknown client_id → 401
-    let resp = app.clone().oneshot(
-        Request::builder()
-            .uri(format!("/files/{}?client_id={}", object_uuid, uuid::Uuid::new_v4()))
             .body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn object_endpoint_requires_registered_client() {
+async fn object_endpoint_rejects_unauthenticated_ip() {
     use axum::{body::Body, http::{Request, StatusCode}};
     use tower::ServiceExt;
 
@@ -178,23 +210,23 @@ async fn pull_rejects_out_of_range_transaction_id() {
     use axum::{body::Body, http::{Request, StatusCode}};
     use tower::ServiceExt;
 
-    let (store, _container) = setup().await;
-    let client_id = rustend_core::ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client_id).await.unwrap();
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec![] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
 
-    let app = rustend_server::router(store);
-
-    // u64::MAX overflows i64 when cast, turning into -1 which matches everything
-    let body = serde_json::json!({
-        "client_id": client_id,
-        "since": u64::MAX,
-    });
+    let body = serde_json::json!({ "since": u64::MAX });
 
     let resp = app.oneshot(
         Request::builder()
             .method("POST")
             .uri("/changes/query")
             .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
             .body(Body::from(serde_json::to_vec(&body).unwrap()))
             .unwrap()
     ).await.unwrap();
@@ -207,7 +239,9 @@ async fn push_rejects_spoofed_created_by() {
     let client_a = rustend_core::ClientId::new();
     let client_b = rustend_core::ClientId::new();
     for c in [client_a, client_b] {
-        rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
+        rustend_server::db::clients::upsert_client(
+            &store.pool, c, UserId(uuid::Uuid::new_v4()),
+        ).await.unwrap();
     }
     let rev = Revision {
         id: RevisionId::new(), object_id: ObjectId::new(),
@@ -216,10 +250,11 @@ async fn push_rejects_spoofed_created_by() {
         created_by: client_b,    // claims to be client_b
         content: Content::Active(serde_json::json!({})),
     };
-    // pushed by client_a
+    // pushed by client_a (but rev.created_by = client_b)
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![rev] },
+        client_a,
+        vec![rev],
     ).await.unwrap();
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
@@ -229,7 +264,9 @@ async fn push_rejects_spoofed_created_by() {
 async fn push_accepts_intra_batch_parent() {
     let (store, _container) = setup().await;
     let client = rustend_core::ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    rustend_server::db::clients::upsert_client(
+        &store.pool, client, UserId(uuid::Uuid::new_v4()),
+    ).await.unwrap();
     let object_id = ObjectId::new();
     let root = Revision {
         id: RevisionId::new(), object_id,
@@ -246,7 +283,8 @@ async fn push_accepts_intra_batch_parent() {
     };
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root, update] },
+        client,
+        vec![root, update],
     ).await.unwrap();
     assert_eq!(resp.accepted.len(), 2);
     assert!(resp.rejected.is_empty());
@@ -256,7 +294,9 @@ async fn push_accepts_intra_batch_parent() {
 async fn push_rejects_cross_object_parent() {
     let (store, _container) = setup().await;
     let client = rustend_core::ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    rustend_server::db::clients::upsert_client(
+        &store.pool, client, UserId(uuid::Uuid::new_v4()),
+    ).await.unwrap();
     let object_a = ObjectId::new();
     let root_a = Revision {
         id: RevisionId::new(), object_id: object_a,
@@ -266,7 +306,8 @@ async fn push_rejects_cross_object_parent() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root_a.clone()] },
+        client,
+        vec![root_a.clone()],
     ).await.unwrap();
     // Revision for object_b with parent from object_a
     let object_b = ObjectId::new();
@@ -279,7 +320,8 @@ async fn push_rejects_cross_object_parent() {
     };
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![bad_rev] },
+        client,
+        vec![bad_rev],
     ).await.unwrap();
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
@@ -289,7 +331,9 @@ async fn push_rejects_cross_object_parent() {
 async fn push_rejects_duplicate_merge_parents() {
     let (store, _container) = setup().await;
     let client = rustend_core::ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    rustend_server::db::clients::upsert_client(
+        &store.pool, client, UserId(uuid::Uuid::new_v4()),
+    ).await.unwrap();
     let object_id = ObjectId::new();
     let root = Revision {
         id: RevisionId::new(), object_id,
@@ -299,7 +343,8 @@ async fn push_rejects_duplicate_merge_parents() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root.clone()] },
+        client,
+        vec![root.clone()],
     ).await.unwrap();
     // Merge with same parent twice
     let merge = Revision {
@@ -311,7 +356,8 @@ async fn push_rejects_duplicate_merge_parents() {
     };
     let resp = rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![merge] },
+        client,
+        vec![merge],
     ).await.unwrap();
     assert_eq!(resp.rejected.len(), 1);
     assert_eq!(resp.rejected[0].reason, rustend_core::RejectionReason::MalformedData);
@@ -322,19 +368,52 @@ async fn get_object_returns_404_for_unknown_id() {
     use axum::{body::Body, http::{Request, StatusCode}};
     use tower::ServiceExt;
 
-    let (store, _container) = setup().await;
-    let client = rustend_core::ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
-
-    let app = rustend_server::router(store);
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec![] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
     let unknown_object = uuid::Uuid::new_v4();
 
     let resp = app.oneshot(
         Request::builder()
-            .uri(format!("/objects/{}?client_id={}", unknown_object, client.0))
+            .uri(format!("/objects/{}", unknown_object))
+            .header("x-forwarded-for", "127.0.0.1")
             .body(Body::empty()).unwrap()
     ).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn whoami_returns_authenticated_identity() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec!["admin".to_string()] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
+
+    let resp = app.oneshot(
+        Request::builder()
+            .uri("/whoami")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["client_id"], serde_json::json!(client_id.0));
+    assert_eq!(json["user_id"], serde_json::json!(user_id.0));
+    assert_eq!(json["roles"], serde_json::json!(["admin"]));
 }
 
 #[tokio::test]
@@ -343,7 +422,9 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
     let client_a = rustend_core::ClientId::new();
     let client_b = rustend_core::ClientId::new();
     for c in [client_a, client_b] {
-        rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
+        rustend_server::db::clients::upsert_client(
+            &store.pool, c, UserId(uuid::Uuid::new_v4()),
+        ).await.unwrap();
     }
 
     // Push two revisions as client_a, then capture the watermark
@@ -356,7 +437,8 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
         };
         rustend_server::db::push::push_revisions(
             &store.pool,
-            PushRequest { client_id: client_a, revisions: vec![rev] },
+            client_a,
+            vec![rev],
         ).await.unwrap();
     }
 
@@ -374,7 +456,8 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client_a, revisions: vec![late_rev] },
+        client_a,
+        vec![late_rev],
     ).await.unwrap();
 
     // Fetch as client_b using the pre-captured up_to
@@ -390,7 +473,9 @@ async fn pull_up_to_transaction_covers_all_returned_updates() {
 async fn merge_parent_order_is_preserved() {
     let (store, _container) = setup().await;
     let client = rustend_core::ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    rustend_server::db::clients::upsert_client(
+        &store.pool, client, UserId(uuid::Uuid::new_v4()),
+    ).await.unwrap();
 
     let object_id = ObjectId::new();
     let root_a = Revision {
@@ -413,7 +498,8 @@ async fn merge_parent_order_is_preserved() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root_a.clone(), root_b.clone(), root_c.clone()] },
+        client,
+        vec![root_a.clone(), root_b.clone(), root_c.clone()],
     ).await.unwrap();
 
     let merge = Revision {
@@ -425,7 +511,8 @@ async fn merge_parent_order_is_preserved() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![merge.clone()] },
+        client,
+        vec![merge.clone()],
     ).await.unwrap();
 
     let parents = rustend_server::db::revisions::get_parents(&store.pool, merge.id.0)
@@ -438,7 +525,9 @@ async fn merge_parent_order_is_preserved() {
 async fn get_parents_batch_matches_individual_queries() {
     let (store, _container) = setup().await;
     let client = rustend_core::ClientId::new();
-    rustend_server::db::clients::register_client(&store.pool, client).await.unwrap();
+    rustend_server::db::clients::upsert_client(
+        &store.pool, client, UserId(uuid::Uuid::new_v4()),
+    ).await.unwrap();
 
     let object_id = ObjectId::new();
     let root = Revision {
@@ -456,7 +545,8 @@ async fn get_parents_batch_matches_individual_queries() {
     };
     rustend_server::db::push::push_revisions(
         &store.pool,
-        PushRequest { client_id: client, revisions: vec![root.clone(), update.clone()] },
+        client,
+        vec![root.clone(), update.clone()],
     ).await.unwrap();
 
     let batch = rustend_server::db::revisions::get_parents_batch(
@@ -470,13 +560,109 @@ async fn get_parents_batch_matches_individual_queries() {
 }
 
 #[tokio::test]
+async fn push_via_http_uses_auth_client_id() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec![] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
+
+    let object_id = ObjectId::new();
+    let rev = Revision {
+        id: RevisionId::new(), object_id,
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client_id,
+        content: Content::Active(serde_json::json!({"name": "Rome"})),
+    };
+    // Note: body has NO client_id field (new protocol)
+    let body = serde_json::json!({ "revisions": [rev] });
+
+    let resp = app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/changes")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["accepted"].as_array().unwrap().len(), 1);
+    assert!(json["rejected"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn pull_via_http_excludes_own_revisions() {
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt;
+
+    let client_ip: IpAddr = "127.0.0.1".parse().unwrap();
+    let client_id = ClientId::new();
+    let user_id   = UserId(uuid::Uuid::new_v4());
+    let auth = test_auth(vec![(
+        client_ip,
+        AuthInfo { client_id, user_id, roles: vec![] },
+    )]);
+    let (app, _container) = setup_http(auth).await;
+
+    // Push one revision directly as this client
+    // (We need a pool; reconstruct from the app isn't possible — use db::push directly via setup)
+    // Instead, push via HTTP so the handler registers the client
+    let rev = Revision {
+        id: RevisionId::new(), object_id: ObjectId::new(),
+        object_type: "trip".into(), lineage: Lineage::Root,
+        created_at: chrono::Utc::now(), created_by: client_id,
+        content: Content::Active(serde_json::json!({})),
+    };
+    let push_body = serde_json::json!({ "revisions": [rev] });
+    let push_resp = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/changes")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::from(serde_json::to_vec(&push_body).unwrap()))
+            .unwrap()
+    ).await.unwrap();
+    assert_eq!(push_resp.status(), StatusCode::OK);
+
+    // Pull without client_id in body — server infers it from auth
+    let body = serde_json::json!({ "since": null });
+    let resp = app.oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/changes/query")
+            .header("content-type", "application/json")
+            .header("x-forwarded-for", "127.0.0.1")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let pull_resp: rustend_core::PullResponse = serde_json::from_slice(&bytes).unwrap();
+    // Own revision must be excluded from pull
+    assert_eq!(pull_resp.object_updates.len(), 0);
+}
+
+#[tokio::test]
 async fn filter_does_not_hide_conflict_when_one_head_matches() {
     let (store, _container) = setup().await;
     let client_a = rustend_core::ClientId::new();
     let client_b = rustend_core::ClientId::new();
     let client_c = rustend_core::ClientId::new();
     for c in [client_a, client_b, client_c] {
-        rustend_server::db::clients::register_client(&store.pool, c).await.unwrap();
+        rustend_server::db::clients::upsert_client(
+            &store.pool, c, UserId(uuid::Uuid::new_v4()),
+        ).await.unwrap();
     }
 
     let object_id = ObjectId::new();
@@ -489,7 +675,7 @@ async fn filter_does_not_hide_conflict_when_one_head_matches() {
         content: Content::Active(serde_json::json!({})),
     };
     rustend_server::db::push::push_revisions(
-        &store.pool, PushRequest { client_id: client_a, revisions: vec![root.clone()] },
+        &store.pool, client_a, vec![root.clone()],
     ).await.unwrap();
 
     // rev_b created AFTER t0 — passes the Gt(t0) filter
@@ -507,10 +693,10 @@ async fn filter_does_not_hide_conflict_when_one_head_matches() {
         content: Content::Active(serde_json::json!({})),
     };
     rustend_server::db::push::push_revisions(
-        &store.pool, PushRequest { client_id: client_b, revisions: vec![rev_b] },
+        &store.pool, client_b, vec![rev_b],
     ).await.unwrap();
     rustend_server::db::push::push_revisions(
-        &store.pool, PushRequest { client_id: client_c, revisions: vec![rev_c] },
+        &store.pool, client_c, vec![rev_c],
     ).await.unwrap();
 
     // Filter: only revisions created after t0

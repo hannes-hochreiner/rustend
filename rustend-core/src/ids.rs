@@ -17,6 +17,10 @@ pub struct ClientId(pub Uuid);
 #[serde(transparent)]
 pub struct TransactionId(pub u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct UserId(pub Uuid);
+
 impl ObjectId {
     pub fn new() -> Self { Self(Uuid::new_v4()) }
 }
@@ -63,5 +67,13 @@ mod tests {
         let json = serde_json::to_string(&id).unwrap();
         let back: TransactionId = serde_json::from_str(&json).unwrap();
         assert_eq!(id.0, back.0);
+    }
+
+    #[test]
+    fn user_id_roundtrip() {
+        let id = UserId(Uuid::new_v4());
+        let json = serde_json::to_string(&id).unwrap();
+        let back: UserId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
     }
 }

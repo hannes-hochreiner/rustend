@@ -1,20 +1,17 @@
 use axum::{
     extract::{Path, State},
-    http::Uri,
+    Extension,
     Json,
 };
 use rustend_core::{HeadAction, ObjectId, ObjectUpdate};
 use uuid::Uuid;
-use crate::{error::ServerError, store::ServerStore, db};
-use super::files::require_client;
+use crate::{auth::AuthInfo, error::ServerError, store::ServerStore, db};
 
 pub async fn get_object(
     State(store): State<ServerStore>,
-    uri: Uri,
+    Extension(_auth): Extension<AuthInfo>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ObjectUpdate>, ServerError> {
-    require_client(&store.pool, &uri).await?;
-
     let object_id = ObjectId(id);
     let mut tx = store.pool.begin().await?;
     let head_ids = db::object_heads::get_heads(&mut tx, id).await?;

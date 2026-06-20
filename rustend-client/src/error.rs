@@ -9,6 +9,8 @@ pub enum RustendClientError {
     Serialisation(#[from] serde_json::Error),
     #[error("network error: {0}")]
     Network(String),
+    #[error("server rejected authentication: {0}")]
+    Unauthenticated(String),
     #[error("server rejected revision: {0:?}")]
     Rejected(RejectionReason),
     #[error("object not in local cache")]

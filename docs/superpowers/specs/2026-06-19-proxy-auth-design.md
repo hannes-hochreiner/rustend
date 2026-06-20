@@ -120,7 +120,7 @@ A Tower `Layer` / `Service` pair inserted into the router before all other handl
 3. `AuthError::Unauthenticated` → return `401 Unauthorized`.
 4. `AuthError::Internal` → return `500 Internal Server Error`.
 5. On success:
-   - `INSERT INTO clients (id, user_id, registered_at) VALUES ($1, $2, now()) ON CONFLICT (id) DO NOTHING` — auto-registers new clients while tolerating races.
+   - `INSERT INTO clients (id, user_id, registered_at) VALUES ($1, $2, now()) ON CONFLICT (id) DO UPDATE SET user_id = EXCLUDED.user_id WHERE clients.user_id IS DISTINCT FROM EXCLUDED.user_id` — auto-registers new clients; updates `user_id` only when the auth provider mapping changes, avoiding spurious writes on every request.
    - Insert `AuthInfo` into request extensions.
    - Forward request to the next handler.
 
@@ -185,7 +185,7 @@ The existing `ServerError::UnknownClient` variant is replaced by these two new c
 
 ## 5. Database Migration
 
-One new migration (`002_proxy_auth.sql`):
+One new migration (`003_proxy_auth.sql`):
 
 ```sql
 -- Add user_id to clients; backfill existing rows with a nil UUID as a placeholder

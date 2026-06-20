@@ -13,7 +13,9 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
-form_urlencoded = "1"
+async-trait = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
 
 [dev-dependencies]
 testcontainers = "0.23"
