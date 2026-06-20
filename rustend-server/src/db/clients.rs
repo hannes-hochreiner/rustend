@@ -9,7 +9,8 @@ pub async fn upsert_client(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO clients (id, user_id, registered_at) VALUES ($1, $2, $3) \
-         ON CONFLICT (id) DO UPDATE SET user_id = EXCLUDED.user_id"
+         ON CONFLICT (id) DO UPDATE SET user_id = EXCLUDED.user_id \
+         WHERE clients.user_id IS DISTINCT FROM EXCLUDED.user_id"
     )
     .bind(id.0)
     .bind(user_id.0)

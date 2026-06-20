@@ -38,7 +38,7 @@
 | Modify | `rustend-server/src/handlers/objects.rs` | Use `Extension<AuthInfo>` instead of `require_client` |
 | Modify | `rustend-server/src/db/clients.rs` | Add `upsert_client`; Task 8: remove `register_client`/`client_exists` |
 | Modify | `rustend-server/src/error.rs` | Add `Unauthenticated`/`AuthProvider` variants; Task 8: remove `UnknownClient` |
-| Create | `rustend-server/migrations/002_proxy_auth.sql` | Add `user_id` column to `clients` |
+| Create | `rustend-server/migrations/003_proxy_auth.sql` | Add `user_id` column to `clients` |
 | Modify | `rustend-server/Cargo.toml` | Add `async-trait`; Task 7: remove `form_urlencoded` |
 | Modify | `rustend-server/tests/integration.rs` | `TestAuthProvider`, `MockConnectInfo`, updated test setup |
 | Modify | `rustend-client/src/idb/sync_state.rs` | Add `user_id` to `SyncStateRecord`; update read/write signatures |

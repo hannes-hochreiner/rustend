@@ -57,7 +57,7 @@ impl Repository {
                 }
                 (whoami.client_id, whoami.user_id)
             }
-            Err(_) => {
+            Err(RustendClientError::Network(_)) => {
                 // Network unavailable — use cached identity if present
                 match (stored_client, stored_user) {
                     (Some(cid), Some(uid)) => (cid, uid),
@@ -66,6 +66,7 @@ impl Repository {
                     )),
                 }
             }
+            Err(e) => return Err(e),
         };
 
         Ok(Self { db, client_id, user_id, schema })
@@ -86,8 +87,8 @@ impl Repository {
             .await
             .map_err(|e| RustendClientError::Network(e.to_string()))?;
         if !resp.ok() {
-            return Err(RustendClientError::Network(
-                format!("whoami failed: {}", resp.status()),
+            return Err(RustendClientError::Unauthenticated(
+                format!("whoami returned HTTP {}", resp.status()),
             ));
         }
         resp.json::<WhoAmIResponse>()
