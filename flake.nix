@@ -64,6 +64,7 @@
         export PATH="${pkgs.lib.makeBinPath devDeps}:$PATH"
         export OPENSSL_DEV=${pkgs.openssl.dev}
         export PKG_CONFIG_PATH="${pkgs.openssl.dev}/lib/pkgconfig"
+        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [pkgs.openssl]}:$LD_LIBRARY_PATH"
         export name="${name}"
         exec nu -e "source start.nu"
       '';
